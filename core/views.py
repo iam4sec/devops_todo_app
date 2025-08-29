@@ -10,6 +10,9 @@ from django.utils import timezone
 from django.core.cache import cache
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
 from drf_spectacular.openapi import OpenApiTypes
 from .models import User, Session, List, Todo
@@ -109,837 +112,1025 @@ def paginate(queryset, request, limit=50):
     return items, next_cursor
 
 # Auth Views
-@extend_schema(
-    summary="Get CSRF Token",
-    description="Retrieve CSRF token for authenticated requests",
-    tags=["Auth"],
-    responses={
-        200: {
-            "type": "object",
-            "properties": {
-                "csrfToken": {"type": "string", "description": "CSRF token"}
+class CSRFTokenView(APIView):
+    @extend_schema(
+        summary="Get CSRF Token",
+        description="Retrieve CSRF token for authenticated requests",
+        tags=["Auth"],
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "csrfToken": {"type": "string", "description": "CSRF token"}
+                }
             }
         }
-    }
-)
+    )
+    def get(self, request):
+        return Response({'csrfToken': get_token(request)})
+
+# Keep function-based view for backward compatibility
 @ensure_csrf_cookie
 @require_http_methods(["GET"])
 def csrf_token(request):
-    return JsonResponse({'csrfToken': get_token(request)})
+    view = CSRFTokenView()
+    view.request = request
+    return view.get(request)
 
-@extend_schema(
-    summary="User Login",
-    description="Authenticate user and create session",
-    tags=["Auth"],
-    request={
-        "type": "object",
-        "properties": {
-            "email": {"type": "string", "format": "email", "description": "User email"},
-            "password": {"type": "string", "description": "User password"}
-        },
-        "required": ["email", "password"]
-    },
-    responses={
-        200: {
+class RegisterView(APIView):
+    @extend_schema(
+        summary="User Registration",
+        description="Register a new user account",
+        tags=["Auth"],
+        request={
             "type": "object",
             "properties": {
-                "user_id": {"type": "string", "format": "uuid", "description": "User ID"}
-            }
+                "email": {"type": "string", "format": "email", "description": "User email"},
+                "password": {"type": "string", "minLength": 8, "description": "User password"},
+                "password_confirm": {"type": "string", "description": "Password confirmation"}
+            },
+            "required": ["email", "password", "password_confirm"]
         },
-        400: {
-            "type": "object",
-            "properties": {
-                "errors": {"type": "object", "description": "Validation errors"}
+        responses={
+            201: {
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "format": "uuid", "description": "User ID"},
+                    "email": {"type": "string", "format": "email", "description": "User email"}
+                }
+            },
+            400: {
+                "type": "object",
+                "properties": {
+                    "errors": {"type": "object", "description": "Validation errors"}
+                }
             }
         }
-    }
-)
-@csrf_protect
-@require_http_methods(["POST"])
-def login(request):
-    try:
-        data = json.loads(request.body)
-        serializer = LoginSerializer(data)
-        validated_data = serializer.validate()
-        
-        if not validated_data:
-            return JsonResponse({'errors': serializer.errors}, status=400)
-        
-        user = validated_data['user']
-        ip = get_ip(request)
-        
-        # Clean up old sessions for this user
-        Session.objects.filter(user=user, expires_at__lt=timezone.now()).delete()
-        
-        session = Session.objects.create(
-            user=user, ip=ip,
-            expires_at=timezone.now() + timedelta(seconds=settings.SESSION_COOKIE_AGE)
-        )
-        
-        # Cache session data
-        cache.set(f'session:{session.id}', {
-            'user_id': user.id,
-            'expires_at': session.expires_at,
-            'ip': ip
-        }, timeout=settings.SESSION_COOKIE_AGE)
-        
-        response = JsonResponse({'user_id': str(user.id)})
-        response.set_cookie(
-            'sid', str(session.id), 
-            max_age=settings.SESSION_COOKIE_AGE,
-            httponly=True, 
-            secure=not settings.DEBUG,
-            samesite='Lax'
-        )
-        
-        logger.info(f"User {user.email} logged in from {ip}")
-        return response
-        
-    except json.JSONDecodeError:
-        return JsonResponse({'error': 'Invalid JSON'}, status=400)
-    except Exception as e:
-        logger.error(f"Login error: {e}")
-        return JsonResponse({'error': 'Login failed'}, status=500)
-
-@extend_schema(
-    summary="User Logout",
-    description="Logout user and destroy session",
-    tags=["Auth"],
-    responses={
-        200: {
-            "type": "object",
-            "properties": {
-                "logged_out": {"type": "boolean", "description": "Logout status"}
-            }
-        }
-    }
-)
-@csrf_protect
-@require_http_methods(["POST"])
-def logout(request):
-    sid = request.COOKIES.get('sid')
-    if sid:
-        Session.objects.filter(id=sid).delete()
-        cache.delete(f'session:{sid}')
-        logger.info(f"User logged out, session {sid} deleted")
-    
-    response = JsonResponse({'logged_out': True})
-    response.delete_cookie('sid')
-    return response
-
-@extend_schema(
-    summary="Refresh Session",
-    description="Refresh user session and extend expiry",
-    tags=["Auth"],
-    responses={
-        200: {
-            "type": "object",
-            "properties": {
-                "refreshed": {"type": "boolean", "description": "Session refresh status"}
-            }
-        },
-        401: {
-            "type": "object",
-            "properties": {
-                "error": {"type": "string"}
-            }
-        }
-    }
-)
-@csrf_protect
-@require_http_methods(["POST"])
-def refresh(request):
-    user = get_user_from_cache(request)
-    if not user:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-    
-    sid = request.COOKIES.get('sid')
-    if sid:
+    )
+    def post(self, request):
         try:
-            session = Session.objects.get(id=sid, user=user)
-            session.expires_at = timezone.now() + timedelta(seconds=settings.SESSION_COOKIE_AGE)
-            session.save()
+            data = request.data if hasattr(request, 'data') else json.loads(request.body)
             
-            # Update cache
-            cache.set(f'session:{sid}', {
+            email = data.get('email', '').strip().lower()
+            password = data.get('password', '')
+            password_confirm = data.get('password_confirm', '')
+            
+            errors = {}
+            
+            if not email or '@' not in email:
+                errors['email'] = 'Valid email is required'
+            elif User.objects.filter(email=email).exists():
+                errors['email'] = 'Email already registered'
+                
+            if len(password) < 8:
+                errors['password'] = 'Password must be at least 8 characters'
+                
+            if password != password_confirm:
+                errors['password_confirm'] = 'Passwords do not match'
+                
+            if errors:
+                return Response({'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+            
+            with transaction.atomic():
+                user = User.objects.create_user(email=email, password=password)
+                
+            return Response({
+                'user_id': str(user.id),
+                'email': user.email
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            logger.error(f"Registration error: {e}")
+            return Response({'error': 'Registration failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class LoginView(APIView):
+    @extend_schema(
+        summary="User Login",
+        description="Authenticate user and create session",
+        tags=["Auth"],
+        request={
+            "type": "object",
+            "properties": {
+                "email": {"type": "string", "format": "email", "description": "User email"},
+                "password": {"type": "string", "description": "User password"}
+            },
+            "required": ["email", "password"]
+        },
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "format": "uuid", "description": "User ID"}
+                }
+            },
+            400: {
+                "type": "object",
+                "properties": {
+                    "errors": {"type": "object", "description": "Validation errors"}
+                }
+            }
+        }
+    )
+    def post(self, request):
+        try:
+            data = request.data if hasattr(request, 'data') else json.loads(request.body)
+            serializer = LoginSerializer(data)
+            validated_data = serializer.validate()
+            
+            if not validated_data:
+                return Response({'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+            
+            user = validated_data['user']
+            ip = get_ip(request)
+            
+            # Clean up old sessions for this user
+            Session.objects.filter(user=user, expires_at__lt=timezone.now()).delete()
+            
+            session = Session.objects.create(
+                user=user, ip=ip,
+                expires_at=timezone.now() + timedelta(seconds=settings.SESSION_COOKIE_AGE)
+            )
+            
+            # Cache session data
+            cache.set(f'session:{session.id}', {
                 'user_id': user.id,
                 'expires_at': session.expires_at,
-                'ip': session.ip
+                'ip': ip
             }, timeout=settings.SESSION_COOKIE_AGE)
             
-            response = JsonResponse({'refreshed': True})
+            response = Response({'user_id': str(user.id)})
             response.set_cookie(
-                'sid', str(session.id),
+                'sid', str(session.id), 
                 max_age=settings.SESSION_COOKIE_AGE,
-                httponly=True,
+                httponly=True, 
                 secure=not settings.DEBUG,
                 samesite='Lax'
             )
+            
+            logger.info(f"User {user.email} logged in from {ip}")
             return response
-        except Session.DoesNotExist:
-            pass
-    
-    return JsonResponse({'error': 'Session not found'}, status=401)
-
-# API Views
-@extend_schema(
-    summary="Current User Profile",
-    description="Get current authenticated user information",
-    tags=["User"],
-    responses={
-        200: {
-            "type": "object",
-            "properties": {
-                "id": {"type": "string", "format": "uuid", "description": "User ID"},
-                "email": {"type": "string", "format": "email", "description": "User email"}
-            }
-        },
-        401: {
-            "type": "object",
-            "properties": {
-                "error": {"type": "string", "description": "Error message"}
-            }
-        }
-    }
-)
-@require_http_methods(["GET"])
-def me(request):
-    user = get_user_from_cache(request)
-    if not user:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-    return JsonResponse({'id': str(user.id), 'email': user.email})
-
-@extend_schema(
-    summary="Get Lists",
-    description="Retrieve user's todo lists with optional search and pagination",
-    tags=["Lists"],
-    parameters=[
-        OpenApiParameter("q", OpenApiTypes.STR, description="Search query for list names"),
-        OpenApiParameter("cursor", OpenApiTypes.STR, description="Pagination cursor")
-    ],
-    responses={
-        200: {
-            "type": "object",
-            "properties": {
-                "data": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "string", "format": "uuid"},
-                            "name": {"type": "string"},
-                            "color": {"type": "string", "nullable": True}
-                        }
-                    }
-                },
-                "next_cursor": {"type": "string", "nullable": True}
-            }
-        }
-    }
-)
-@require_http_methods(["GET"])
-def lists(request):
-    user = get_user_from_cache(request)
-    if not user:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-    
-    cache_key = f'user_lists:{user.id}'
-    q = request.GET.get('q', '').strip()
-    if q:
-        cache_key += f':search:{q}'
-    
-    cached_data = cache.get(cache_key)
-    if cached_data:
-        return JsonResponse(cached_data)
-    
-    qs = List.objects.filter(user=user).select_related('user').order_by('-created_at')
-    if q:
-        qs = qs.filter(name__icontains=q)
-    
-    items, cursor = paginate(qs, request)
-    data = {
-        'data': [{'id': str(l.id), 'name': l.name, 'color': l.color} for l in items],
-        'next_cursor': cursor
-    }
-    
-    cache.set(cache_key, data, timeout=300)
-    return JsonResponse(data)
-
-@extend_schema(
-    summary="Create List",
-    description="Create a new todo list",
-    tags=["Lists"],
-    request={
-        "type": "object",
-        "properties": {
-            "name": {"type": "string", "maxLength": 255, "description": "List name"},
-            "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$", "description": "Hex color code"}
-        },
-        "required": ["name"]
-    },
-    responses={
-        201: {
-            "type": "object",
-            "properties": {
-                "id": {"type": "string", "format": "uuid"},
-                "name": {"type": "string"},
-                "color": {"type": "string", "nullable": True}
-            }
-        }
-    }
-)
-@csrf_protect
-@require_http_methods(["POST"])
-def lists_create(request):
-    user = get_user_from_cache(request)
-    if not user:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-    
-    try:
-        data = json.loads(request.body)
-        serializer = ListSerializer(data)
-        validated_data = serializer.validate()
-        
-        if not validated_data:
-            return JsonResponse({'errors': serializer.errors}, status=400)
-        
-        with transaction.atomic():
-            list_obj = List.objects.create(user=user, **validated_data)
-            cache.delete_many([f'user_lists:{user.id}*'])
             
-        return JsonResponse({
-            'id': str(list_obj.id), 'name': list_obj.name, 'color': list_obj.color
-        }, status=201)
-    except Exception as e:
-        logger.error(f"List creation error: {e}")
-        return JsonResponse({'error': 'Creation failed'}, status=500)
+        except json.JSONDecodeError:
+            return Response({'error': 'Invalid JSON'}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Login error: {e}")
+            return Response({'error': 'Login failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-@extend_schema(
-    summary="Get List Detail",
-    description="Retrieve specific list information",
-    tags=["Lists"],
-    responses={
-        200: {
-            "type": "object",
-            "properties": {
-                "id": {"type": "string", "format": "uuid"},
-                "name": {"type": "string"},
-                "color": {"type": "string", "nullable": True}
-            }
-        },
-        404: {
-            "type": "object",
-            "properties": {
-                "error": {"type": "string"}
-            }
-        }
-    }
-)
-@require_http_methods(["GET"])
-def list_detail(request, list_id):
-    user = get_user_from_cache(request)
-    if not user:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-    
-    cache_key = f'list_detail:{list_id}:{user.id}'
-    cached_data = cache.get(cache_key)
-    if cached_data:
-        return JsonResponse(cached_data)
-    
-    try:
-        list_obj = List.objects.get(id=list_id, user=user)
-        data = {'id': str(list_obj.id), 'name': list_obj.name, 'color': list_obj.color}
-        cache.set(cache_key, data, timeout=300)
-        return JsonResponse(data)
-    except List.DoesNotExist:
-        return JsonResponse({'error': 'Not found'}, status=404)
+# Keep function-based view for backward compatibility
+def login(request):
+    view = LoginView()
+    view.request = request
+    return view.post(request)
 
-@extend_schema(
-    summary="Update List",
-    description="Update list name or color",
-    tags=["Lists"],
-    request={
-        "type": "object",
-        "properties": {
-            "name": {"type": "string", "maxLength": 255},
-            "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}
-        }
-    },
-    responses={
-        200: {
-            "type": "object",
-            "properties": {
-                "id": {"type": "string", "format": "uuid"},
-                "name": {"type": "string"},
-                "color": {"type": "string", "nullable": True}
-            }
-        }
-    }
-)
-@csrf_protect
-@require_http_methods(["PATCH"])
-def list_update(request, list_id):
-    user = get_user_from_cache(request)
-    if not user:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-    
-    try:
-        list_obj = List.objects.select_for_update().get(id=list_id, user=user)
-        data = json.loads(request.body)
-        serializer = ListSerializer(data)
-        validated_data = serializer.validate()
-        
-        if not validated_data:
-            return JsonResponse({'errors': serializer.errors}, status=400)
-        
-        with transaction.atomic():
-            for k, v in validated_data.items():
-                if v is not None:
-                    setattr(list_obj, k, v)
-            list_obj.save()
-            cache.delete_many([f'user_lists:{user.id}*', f'list_detail:{list_id}:{user.id}'])
-            
-        return JsonResponse({'id': str(list_obj.id), 'name': list_obj.name, 'color': list_obj.color})
-    except List.DoesNotExist:
-        return JsonResponse({'error': 'Not found'}, status=404)
-    except Exception as e:
-        logger.error(f"List update error: {e}")
-        return JsonResponse({'error': 'Update failed'}, status=500)
-
-@extend_schema(
-    summary="Delete List",
-    description="Delete a todo list and all its todos",
-    tags=["Lists"],
-    responses={
-        204: {"description": "List deleted successfully"},
-        404: {
-            "type": "object",
-            "properties": {
-                "error": {"type": "string"}
-            }
-        }
-    }
-)
-@csrf_protect
-@require_http_methods(["DELETE"])
-def list_delete(request, list_id):
-    user = get_user_from_cache(request)
-    if not user:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-    
-    try:
-        with transaction.atomic():
-            list_obj = List.objects.select_for_update().get(id=list_id, user=user)
-            list_obj.delete()
-            cache.delete_many([f'user_lists:{user.id}*', f'list_detail:{list_id}:{user.id}'])
-        return JsonResponse({}, status=204)
-    except List.DoesNotExist:
-        return JsonResponse({'error': 'Not found'}, status=404)
-
-@extend_schema(
-    summary="Get Todos",
-    description="Retrieve todos with filtering and pagination",
-    tags=["Todos"],
-    parameters=[
-        OpenApiParameter("list_id", OpenApiTypes.UUID, description="Filter by list ID"),
-        OpenApiParameter("status", OpenApiTypes.STR, description="Filter by status (open, doing, done)"),
-        OpenApiParameter("q", OpenApiTypes.STR, description="Search query for todo titles"),
-        OpenApiParameter("cursor", OpenApiTypes.STR, description="Pagination cursor")
-    ],
-    responses={
-        200: {
-            "type": "object",
-            "properties": {
-                "data": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "string", "format": "uuid"},
-                            "list_id": {"type": "string", "format": "uuid"},
-                            "title": {"type": "string"},
-                            "status": {"type": "string", "enum": ["open", "doing", "done"]},
-                            "priority": {"type": "integer", "minimum": 1, "maximum": 5},
-                            "version": {"type": "integer"}
-                        }
-                    }
-                },
-                "next_cursor": {"type": "string", "nullable": True}
-            }
-        }
-    }
-)
-@require_http_methods(["GET"])
-def todos(request):
-    user = get_user_from_cache(request)
-    if not user:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-    
-    filters = {
-        'list_id': request.GET.get('list_id'),
-        'status': request.GET.get('status'),
-        'q': request.GET.get('q', '').strip()
-    }
-    cache_key = f'user_todos:{user.id}:' + ':'.join(f'{k}={v}' for k, v in filters.items() if v)
-    
-    cached_data = cache.get(cache_key)
-    if cached_data:
-        return JsonResponse(cached_data)
-    
-    qs = Todo.objects.filter(list__user=user).select_related('list').order_by('-updated_at')
-    if filters['list_id']:
-        qs = qs.filter(list_id=filters['list_id'])
-    if filters['status']:
-        qs = qs.filter(status=filters['status'])
-    if filters['q']:
-        qs = qs.filter(title__icontains=filters['q'])
-    
-    items, cursor = paginate(qs, request)
-    data = {
-        'data': [{
-            'id': str(t.id), 'list_id': str(t.list_id), 'title': t.title,
-            'status': t.status, 'priority': t.priority, 'version': t.version
-        } for t in items],
-        'next_cursor': cursor
-    }
-    
-    cache.set(cache_key, data, timeout=120)
-    return JsonResponse(data)
-
-@extend_schema(
-    summary="Create Todo",
-    description="Create a new todo item",
-    tags=["Todos"],
-    request={
-        "type": "object",
-        "properties": {
-            "list_id": {"type": "string", "format": "uuid", "description": "List ID"},
-            "title": {"type": "string", "maxLength": 255, "description": "Todo title"},
-            "status": {"type": "string", "enum": ["open", "doing", "done"], "default": "open"},
-            "priority": {"type": "integer", "minimum": 1, "maximum": 5, "default": 3}
-        },
-        "required": ["list_id", "title"]
-    },
-    responses={
-        201: {
-            "type": "object",
-            "properties": {
-                "id": {"type": "string", "format": "uuid"},
-                "title": {"type": "string"},
-                "status": {"type": "string"}
-            }
-        }
-    }
-)
-@csrf_protect
-@require_http_methods(["POST"])
-def todos_create(request):
-    user = get_user_from_cache(request)
-    if not user:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-    
-    try:
-        data = json.loads(request.body)
-        serializer = TodoSerializer(data)
-        validated_data = serializer.validate()
-        
-        if not validated_data:
-            return JsonResponse({'errors': serializer.errors}, status=400)
-        
-        list_obj = List.objects.get(id=validated_data['list_id'], user=user)
-        with transaction.atomic():
-            todo_data = {k: v for k, v in validated_data.items() if k != 'list_id'}
-            todo = Todo.objects.create(list=list_obj, **todo_data)
-            cache.delete_many([f'user_todos:{user.id}*'])
-            
-        return JsonResponse({
-            'id': str(todo.id), 'title': todo.title, 'status': todo.status
-        }, status=201)
-    except List.DoesNotExist:
-        return JsonResponse({'error': 'List not found'}, status=404)
-    except Exception as e:
-        logger.error(f"Todo creation error: {e}")
-        return JsonResponse({'error': 'Creation failed'}, status=500)
-
-@extend_schema(
-    summary="Get Todo Detail",
-    description="Retrieve specific todo information",
-    tags=["Todos"],
-    responses={
-        200: {
-            "type": "object",
-            "properties": {
-                "id": {"type": "string", "format": "uuid"},
-                "title": {"type": "string"},
-                "status": {"type": "string", "enum": ["open", "doing", "done"]},
-                "priority": {"type": "integer", "minimum": 1, "maximum": 5},
-                "version": {"type": "integer"}
-            }
-        },
-        404: {
-            "type": "object",
-            "properties": {
-                "error": {"type": "string"}
-            }
-        }
-    }
-)
-@require_http_methods(["GET"])
-def todo_detail(request, todo_id):
-    user = get_user_from_cache(request)
-    if not user:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-    
-    cache_key = f'todo_detail:{todo_id}:{user.id}'
-    cached_data = cache.get(cache_key)
-    if cached_data:
-        return JsonResponse(cached_data)
-    
-    try:
-        todo = Todo.objects.get(id=todo_id, list__user=user)
-        data = {
-            'id': str(todo.id), 'title': todo.title, 'status': todo.status,
-            'priority': todo.priority, 'version': todo.version
-        }
-        cache.set(cache_key, data, timeout=300)
-        return JsonResponse(data)
-    except Todo.DoesNotExist:
-        return JsonResponse({'error': 'Not found'}, status=404)
-
-@extend_schema(
-    summary="Update Todo",
-    description="Update todo properties (title, status, priority)",
-    tags=["Todos"],
-    request={
-        "type": "object",
-        "properties": {
-            "title": {"type": "string", "maxLength": 255},
-            "status": {"type": "string", "enum": ["open", "doing", "done"]},
-            "priority": {"type": "integer", "minimum": 1, "maximum": 5}
-        }
-    },
-    responses={
-        200: {
-            "type": "object",
-            "properties": {
-                "id": {"type": "string", "format": "uuid"},
-                "version": {"type": "integer"}
-            }
-        }
-    }
-)
-@csrf_protect
-@require_http_methods(["PATCH"])
-def todo_update(request, todo_id):
-    user = get_user_from_cache(request)
-    if not user:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-    
-    try:
-        todo = Todo.objects.select_for_update().get(id=todo_id, list__user=user)
-        data = json.loads(request.body)
-        data.pop('list_id', None)  # Security: prevent list_id changes
-        
-        serializer = TodoSerializer(data)
-        validated_data = serializer.validate()
-        
-        if not validated_data:
-            return JsonResponse({'errors': serializer.errors}, status=400)
-        
-        with transaction.atomic():
-            for k, v in validated_data.items():
-                if k != 'list_id' and v is not None:
-                    setattr(todo, k, v)
-            todo.version += 1
-            todo.save()
-            cache.delete_many([f'user_todos:{user.id}*', f'todo_detail:{todo_id}:{user.id}'])
-            
-        return JsonResponse({'id': str(todo.id), 'version': todo.version})
-    except Todo.DoesNotExist:
-        return JsonResponse({'error': 'Not found'}, status=404)
-    except Exception as e:
-        logger.error(f"Todo update error: {e}")
-        return JsonResponse({'error': 'Update failed'}, status=500)
-
-@extend_schema(
-    summary="Delete Todo",
-    description="Delete a todo item",
-    tags=["Todos"],
-    responses={
-        204: {"description": "Todo deleted successfully"},
-        404: {
-            "type": "object",
-            "properties": {
-                "error": {"type": "string"}
-            }
-        }
-    }
-)
-@csrf_protect
-@require_http_methods(["DELETE"])
-def todo_delete(request, todo_id):
-    user = get_user_from_cache(request)
-    if not user:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-    
-    try:
-        with transaction.atomic():
-            todo = Todo.objects.select_for_update().get(id=todo_id, list__user=user)
-            todo.delete()
-            cache.delete_many([f'user_todos:{user.id}*', f'todo_detail:{todo_id}:{user.id}'])
-        return JsonResponse({}, status=204)
-    except Todo.DoesNotExist:
-        return JsonResponse({'error': 'Not found'}, status=404)
-
-@extend_schema(
-    summary="Toggle Todo Status",
-    description="Toggle todo status between open and done",
-    tags=["Todos"],
-    responses={
-        200: {
-            "type": "object",
-            "properties": {
-                "id": {"type": "string", "format": "uuid"},
-                "status": {"type": "string", "enum": ["open", "done"]},
-                "version": {"type": "integer"}
-            }
-        },
-        404: {
-            "type": "object",
-            "properties": {
-                "error": {"type": "string"}
-            }
-        }
-    }
-)
-@csrf_protect
-@require_http_methods(["POST"])
-def todo_toggle(request, todo_id):
-    user = get_user_from_cache(request)
-    if not user:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-    
-    try:
-        with transaction.atomic():
-            todo = Todo.objects.select_for_update().get(id=todo_id, list__user=user)
-            todo.status = 'done' if todo.status == 'open' else 'open'
-            todo.version += 1
-            todo.save()
-            cache.delete_many([f'user_todos:{user.id}*', f'todo_detail:{todo_id}:{user.id}'])
-            
-        return JsonResponse({'id': str(todo.id), 'status': todo.status, 'version': todo.version})
-    except Todo.DoesNotExist:
-        return JsonResponse({'error': 'Not found'}, status=404)
-
-@extend_schema(
-    summary="Bulk Todo Operations",
-    description="Perform bulk create/delete operations on todos",
-    tags=["Todos"],
-    request={
-        "type": "object",
-        "properties": {
-            "operations": {
-                "type": "array",
-                "maxItems": 100,
-                "items": {
-                    "oneOf": [
-                        {
-                            "type": "object",
-                            "properties": {
-                                "type": {"type": "string", "enum": ["create"]},
-                                "list_id": {"type": "string", "format": "uuid"},
-                                "title": {"type": "string", "maxLength": 255}
-                            },
-                            "required": ["type", "list_id", "title"]
-                        },
-                        {
-                            "type": "object",
-                            "properties": {
-                                "type": {"type": "string", "enum": ["delete"]},
-                                "id": {"type": "string", "format": "uuid"}
-                            },
-                            "required": ["type", "id"]
-                        }
-                    ]
+class LogoutView(APIView):
+    @extend_schema(
+        summary="User Logout",
+        description="Logout user and destroy session",
+        tags=["Auth"],
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "logged_out": {"type": "boolean", "description": "Logout status"}
                 }
             }
-        },
-        "required": ["operations"]
-    },
-    responses={
-        200: {
+        }
+    )
+    def post(self, request):
+        sid = request.COOKIES.get('sid')
+        if sid:
+            Session.objects.filter(id=sid).delete()
+            cache.delete(f'session:{sid}')
+            logger.info(f"User logged out, session {sid} deleted")
+        
+        response = Response({'logged_out': True})
+        response.delete_cookie('sid')
+        return response
+
+# Keep function-based view for backward compatibility
+def logout(request):
+    view = LogoutView()
+    view.request = request
+    return view.post(request)
+
+class RefreshView(APIView):
+    @extend_schema(
+        summary="Refresh Session",
+        description="Refresh user session and extend expiry",
+        tags=["Auth"],
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "refreshed": {"type": "boolean", "description": "Session refresh status"}
+                }
+            },
+            401: {
+                "type": "object",
+                "properties": {
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    )
+    def post(self, request):
+        user = get_user_from_cache(request)
+        if not user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        sid = request.COOKIES.get('sid')
+        if sid:
+            try:
+                session = Session.objects.get(id=sid, user=user)
+                session.expires_at = timezone.now() + timedelta(seconds=settings.SESSION_COOKIE_AGE)
+                session.save()
+                
+                # Update cache
+                cache.set(f'session:{sid}', {
+                    'user_id': user.id,
+                    'expires_at': session.expires_at,
+                    'ip': session.ip
+                }, timeout=settings.SESSION_COOKIE_AGE)
+                
+                response = Response({'refreshed': True})
+                response.set_cookie(
+                    'sid', str(session.id),
+                    max_age=settings.SESSION_COOKIE_AGE,
+                    httponly=True,
+                    secure=not settings.DEBUG,
+                    samesite='Lax'
+                )
+                return response
+            except Session.DoesNotExist:
+                pass
+        
+        return Response({'error': 'Session not found'}, status=status.HTTP_401_UNAUTHORIZED)
+
+def refresh(request):
+    view = RefreshView()
+    view.request = request
+    return view.post(request)
+
+# API Views
+class MeView(APIView):
+    @extend_schema(
+        summary="Current User Profile",
+        description="Get current authenticated user information",
+        tags=["User"],
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "format": "uuid", "description": "User ID"},
+                    "email": {"type": "string", "format": "email", "description": "User email"}
+                }
+            },
+            401: {
+                "type": "object",
+                "properties": {
+                    "error": {"type": "string", "description": "Error message"}
+                }
+            }
+        }
+    )
+    def get(self, request):
+        user = get_user_from_cache(request)
+        if not user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        return Response({'id': str(user.id), 'email': user.email})
+
+# Keep function-based view for backward compatibility
+def me(request):
+    view = MeView()
+    view.request = request
+    return view.get(request)
+
+class ListsView(APIView):
+    @extend_schema(
+        summary="Get Lists",
+        description="Retrieve user's todo lists with optional search and pagination",
+        tags=["Lists"],
+        parameters=[
+            OpenApiParameter("q", OpenApiTypes.STR, description="Search query for list names"),
+            OpenApiParameter("cursor", OpenApiTypes.STR, description="Pagination cursor")
+        ],
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "data": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "format": "uuid"},
+                                "name": {"type": "string"},
+                                "color": {"type": "string", "nullable": True},
+                                "todo_count": {"type": "integer", "description": "Number of todos in list"}
+                            }
+                        }
+                    },
+                    "next_cursor": {"type": "string", "nullable": True}
+                }
+            }
+        }
+    )
+    def get(self, request):
+        user = get_user_from_cache(request)
+        if not user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        cache_key = f'user_lists:{user.id}'
+        q = request.GET.get('q', '').strip()
+        if q:
+            cache_key += f':search:{q}'
+        
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return Response(cached_data)
+        
+        qs = List.objects.filter(user=user).select_related('user').order_by('-created_at')
+        if q:
+            qs = qs.filter(name__icontains=q)
+        
+        items, cursor = paginate(qs, request)
+        data = {
+            'data': [{
+                'id': str(l.id), 
+                'name': l.name, 
+                'color': l.color,
+                'todo_count': l.todos.count()
+            } for l in items],
+            'next_cursor': cursor
+        }
+        
+        cache.set(cache_key, data, timeout=300)
+        return Response(data)
+    
+    @extend_schema(
+        summary="Create List",
+        description="Create a new todo list",
+        tags=["Lists"],
+        request={
             "type": "object",
             "properties": {
-                "results": {
+                "name": {"type": "string", "maxLength": 255, "description": "List name"},
+                "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$", "description": "Hex color code"}
+            },
+            "required": ["name"]
+        },
+        responses={
+            201: {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "format": "uuid"},
+                    "name": {"type": "string"},
+                    "color": {"type": "string", "nullable": True},
+                    "todo_count": {"type": "integer"}
+                }
+            }
+        }
+    )
+    def post(self, request):
+        user = get_user_from_cache(request)
+        if not user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        try:
+            data = request.data if hasattr(request, 'data') else json.loads(request.body)
+            serializer = ListSerializer(data)
+            validated_data = serializer.validate()
+            
+            if not validated_data:
+                return Response({'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+            
+            with transaction.atomic():
+                list_obj = List.objects.create(user=user, **validated_data)
+                cache.delete_many([f'user_lists:{user.id}*'])
+                
+            return Response({
+                'id': str(list_obj.id), 
+                'name': list_obj.name, 
+                'color': list_obj.color,
+                'todo_count': 0
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            logger.error(f"List creation error: {e}")
+            return Response({'error': 'Creation failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# Keep function-based view for backward compatibility
+def lists(request):
+    view = ListsView()
+    view.request = request
+    if request.method == 'GET':
+        return view.get(request)
+    elif request.method == 'POST':
+        return view.post(request)
+
+
+
+class ListDetailView(APIView):
+    @extend_schema(
+        summary="Get List Detail",
+        description="Retrieve specific list information with todos",
+        tags=["Lists"],
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "format": "uuid"},
+                    "name": {"type": "string"},
+                    "color": {"type": "string", "nullable": True},
+                    "todo_count": {"type": "integer"},
+                    "todos": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "format": "uuid"},
+                                "title": {"type": "string"},
+                                "status": {"type": "string", "enum": ["open", "doing", "done"]},
+                                "priority": {"type": "integer"}
+                            }
+                        }
+                    }
+                }
+            },
+            404: {
+                "type": "object",
+                "properties": {
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    )
+    def get(self, request, list_id):
+        user = get_user_from_cache(request)
+        if not user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        try:
+            list_obj = List.objects.prefetch_related('todos').get(id=list_id, user=user)
+            todos = list_obj.todos.all().order_by('-created_at')[:20]  # Limit to 20 recent todos
+            
+            data = {
+                'id': str(list_obj.id), 
+                'name': list_obj.name, 
+                'color': list_obj.color,
+                'todo_count': list_obj.todos.count(),
+                'todos': [{
+                    'id': str(t.id),
+                    'title': t.title,
+                    'status': t.status,
+                    'priority': t.priority
+                } for t in todos]
+            }
+            return Response(data)
+        except List.DoesNotExist:
+            return Response({'error': 'List not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @extend_schema(
+        summary="Update List",
+        description="Update list name or color",
+        tags=["Lists"],
+        request={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "maxLength": 255},
+                "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}
+            }
+        },
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "format": "uuid"},
+                    "name": {"type": "string"},
+                    "color": {"type": "string", "nullable": True}
+                }
+            }
+        }
+    )
+    def put(self, request, list_id):
+        user = get_user_from_cache(request)
+        if not user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        try:
+            list_obj = List.objects.select_for_update().get(id=list_id, user=user)
+            data = request.data if hasattr(request, 'data') else json.loads(request.body)
+            serializer = ListSerializer(data)
+            validated_data = serializer.validate()
+            
+            if not validated_data:
+                return Response({'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+            
+            with transaction.atomic():
+                for k, v in validated_data.items():
+                    if v is not None:
+                        setattr(list_obj, k, v)
+                list_obj.save()
+                cache.delete_many([f'user_lists:{user.id}*', f'list_detail:{list_id}:{user.id}'])
+                
+            return Response({'id': str(list_obj.id), 'name': list_obj.name, 'color': list_obj.color})
+        except List.DoesNotExist:
+            return Response({'error': 'List not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"List update error: {e}")
+            return Response({'error': 'Update failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @extend_schema(
+        summary="Delete List",
+        description="Delete a todo list and all its todos",
+        tags=["Lists"],
+        responses={
+            204: {"description": "List deleted successfully"},
+            404: {
+                "type": "object",
+                "properties": {
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    )
+    def delete(self, request, list_id):
+        user = get_user_from_cache(request)
+        if not user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        try:
+            with transaction.atomic():
+                list_obj = List.objects.select_for_update().get(id=list_id, user=user)
+                list_obj.delete()
+                cache.delete_many([f'user_lists:{user.id}*', f'list_detail:{list_id}:{user.id}'])
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except List.DoesNotExist:
+            return Response({'error': 'List not found'}, status=status.HTTP_404_NOT_FOUND)
+
+def list_detail(request, list_id):
+    view = ListDetailView()
+    view.request = request
+    if request.method == 'GET':
+        return view.get(request, list_id)
+    elif request.method == 'PUT':
+        return view.put(request, list_id)
+    elif request.method == 'DELETE':
+        return view.delete(request, list_id)
+
+
+
+class TodosView(APIView):
+    @extend_schema(
+        summary="Get Todos",
+        description="Retrieve todos with filtering and pagination",
+        tags=["Todos"],
+        parameters=[
+            OpenApiParameter("list_id", OpenApiTypes.UUID, description="Filter by list ID"),
+            OpenApiParameter("status", OpenApiTypes.STR, description="Filter by status (open, doing, done)"),
+            OpenApiParameter("q", OpenApiTypes.STR, description="Search query for todo titles"),
+            OpenApiParameter("cursor", OpenApiTypes.STR, description="Pagination cursor")
+        ],
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "data": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "format": "uuid"},
+                                "list_id": {"type": "string", "format": "uuid"},
+                                "list_name": {"type": "string", "description": "Name of the list"},
+                                "title": {"type": "string"},
+                                "status": {"type": "string", "enum": ["open", "doing", "done"]},
+                                "priority": {"type": "integer", "minimum": 1, "maximum": 5},
+                                "created_at": {"type": "string", "format": "date-time"},
+                                "updated_at": {"type": "string", "format": "date-time"}
+                            }
+                        }
+                    },
+                    "next_cursor": {"type": "string", "nullable": True}
+                }
+            }
+        }
+    )
+    def get(self, request):
+        user = get_user_from_cache(request)
+        if not user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        filters = {
+            'list_id': request.GET.get('list_id'),
+            'status': request.GET.get('status'),
+            'q': request.GET.get('q', '').strip()
+        }
+        cache_key = f'user_todos:{user.id}:' + ':'.join(f'{k}={v}' for k, v in filters.items() if v)
+        
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return Response(cached_data)
+        
+        qs = Todo.objects.filter(list__user=user).select_related('list').order_by('-updated_at')
+        if filters['list_id']:
+            qs = qs.filter(list_id=filters['list_id'])
+        if filters['status']:
+            qs = qs.filter(status=filters['status'])
+        if filters['q']:
+            qs = qs.filter(title__icontains=filters['q'])
+        
+        items, cursor = paginate(qs, request)
+        data = {
+            'data': [{
+                'id': str(t.id), 
+                'list_id': str(t.list_id), 
+                'list_name': t.list.name,
+                'title': t.title,
+                'status': t.status, 
+                'priority': t.priority,
+                'created_at': t.created_at.isoformat(),
+                'updated_at': t.updated_at.isoformat()
+            } for t in items],
+            'next_cursor': cursor
+        }
+        
+        cache.set(cache_key, data, timeout=120)
+        return Response(data)
+    
+    @extend_schema(
+        summary="Create Todo",
+        description="Create a new todo item",
+        tags=["Todos"],
+        request={
+            "type": "object",
+            "properties": {
+                "list_id": {"type": "string", "format": "uuid", "description": "List ID"},
+                "title": {"type": "string", "maxLength": 255, "description": "Todo title"},
+                "status": {"type": "string", "enum": ["open", "doing", "done"], "default": "open"},
+                "priority": {"type": "integer", "minimum": 1, "maximum": 5, "default": 3}
+            },
+            "required": ["list_id", "title"]
+        },
+        responses={
+            201: {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "format": "uuid"},
+                    "title": {"type": "string"},
+                    "status": {"type": "string"},
+                    "priority": {"type": "integer"},
+                    "list_name": {"type": "string"}
+                }
+            }
+        }
+    )
+    def post(self, request):
+        user = get_user_from_cache(request)
+        if not user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        try:
+            data = request.data if hasattr(request, 'data') else json.loads(request.body)
+            serializer = TodoSerializer(data)
+            validated_data = serializer.validate()
+            
+            if not validated_data:
+                return Response({'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+            
+            list_obj = List.objects.get(id=validated_data['list_id'], user=user)
+            with transaction.atomic():
+                todo_data = {k: v for k, v in validated_data.items() if k != 'list_id'}
+                todo = Todo.objects.create(list=list_obj, **todo_data)
+                cache.delete_many([f'user_todos:{user.id}*'])
+                
+            return Response({
+                'id': str(todo.id), 
+                'title': todo.title, 
+                'status': todo.status,
+                'priority': todo.priority,
+                'list_name': list_obj.name
+            }, status=status.HTTP_201_CREATED)
+        except List.DoesNotExist:
+            return Response({'error': 'List not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"Todo creation error: {e}")
+            return Response({'error': 'Creation failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+def todos(request):
+    view = TodosView()
+    view.request = request
+    if request.method == 'GET':
+        return view.get(request)
+    elif request.method == 'POST':
+        return view.post(request)
+
+
+
+class TodoDetailView(APIView):
+    @extend_schema(
+        summary="Get Todo Detail",
+        description="Retrieve specific todo information",
+        tags=["Todos"],
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "format": "uuid"},
+                    "title": {"type": "string"},
+                    "status": {"type": "string", "enum": ["open", "doing", "done"]},
+                    "priority": {"type": "integer", "minimum": 1, "maximum": 5},
+                    "list_id": {"type": "string", "format": "uuid"},
+                    "list_name": {"type": "string"},
+                    "created_at": {"type": "string", "format": "date-time"},
+                    "updated_at": {"type": "string", "format": "date-time"}
+                }
+            },
+            404: {
+                "type": "object",
+                "properties": {
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    )
+    def get(self, request, todo_id):
+        user = get_user_from_cache(request)
+        if not user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        try:
+            todo = Todo.objects.select_related('list').get(id=todo_id, list__user=user)
+            data = {
+                'id': str(todo.id), 
+                'title': todo.title, 
+                'status': todo.status,
+                'priority': todo.priority,
+                'list_id': str(todo.list_id),
+                'list_name': todo.list.name,
+                'created_at': todo.created_at.isoformat(),
+                'updated_at': todo.updated_at.isoformat()
+            }
+            return Response(data)
+        except Todo.DoesNotExist:
+            return Response({'error': 'Todo not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @extend_schema(
+        summary="Update Todo",
+        description="Update todo properties (title, status, priority)",
+        tags=["Todos"],
+        request={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "maxLength": 255},
+                "status": {"type": "string", "enum": ["open", "doing", "done"]},
+                "priority": {"type": "integer", "minimum": 1, "maximum": 5}
+            }
+        },
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "format": "uuid"},
+                    "title": {"type": "string"},
+                    "status": {"type": "string"},
+                    "priority": {"type": "integer"}
+                }
+            }
+        }
+    )
+    def put(self, request, todo_id):
+        user = get_user_from_cache(request)
+        if not user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        try:
+            todo = Todo.objects.select_for_update().get(id=todo_id, list__user=user)
+            data = request.data if hasattr(request, 'data') else json.loads(request.body)
+            data.pop('list_id', None)  # Security: prevent list_id changes
+            
+            serializer = TodoSerializer(data)
+            validated_data = serializer.validate()
+            
+            if not validated_data:
+                return Response({'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+            
+            with transaction.atomic():
+                for k, v in validated_data.items():
+                    if k != 'list_id' and v is not None:
+                        setattr(todo, k, v)
+                todo.version += 1
+                todo.save()
+                cache.delete_many([f'user_todos:{user.id}*', f'todo_detail:{todo_id}:{user.id}'])
+                
+            return Response({
+                'id': str(todo.id), 
+                'title': todo.title,
+                'status': todo.status,
+                'priority': todo.priority
+            })
+        except Todo.DoesNotExist:
+            return Response({'error': 'Todo not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"Todo update error: {e}")
+            return Response({'error': 'Update failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @extend_schema(
+        summary="Delete Todo",
+        description="Delete a todo item",
+        tags=["Todos"],
+        responses={
+            204: {"description": "Todo deleted successfully"},
+            404: {
+                "type": "object",
+                "properties": {
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    )
+    def delete(self, request, todo_id):
+        user = get_user_from_cache(request)
+        if not user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        try:
+            with transaction.atomic():
+                todo = Todo.objects.select_for_update().get(id=todo_id, list__user=user)
+                todo.delete()
+                cache.delete_many([f'user_todos:{user.id}*', f'todo_detail:{todo_id}:{user.id}'])
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Todo.DoesNotExist:
+            return Response({'error': 'Todo not found'}, status=status.HTTP_404_NOT_FOUND)
+
+def todo_detail(request, todo_id):
+    view = TodoDetailView()
+    view.request = request
+    if request.method == 'GET':
+        return view.get(request, todo_id)
+    elif request.method == 'PUT':
+        return view.put(request, todo_id)
+    elif request.method == 'DELETE':
+        return view.delete(request, todo_id)
+
+
+
+class TodoToggleView(APIView):
+    @extend_schema(
+        summary="Toggle Todo Status",
+        description="Toggle todo status between open and done",
+        tags=["Todos"],
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "format": "uuid"},
+                    "status": {"type": "string", "enum": ["open", "done"]},
+                    "version": {"type": "integer"}
+                }
+            },
+            404: {
+                "type": "object",
+                "properties": {
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    )
+    def post(self, request, todo_id):
+        user = get_user_from_cache(request)
+        if not user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        try:
+            with transaction.atomic():
+                todo = Todo.objects.select_for_update().get(id=todo_id, list__user=user)
+                todo.status = 'done' if todo.status == 'open' else 'open'
+                todo.version += 1
+                todo.save()
+                cache.delete_many([f'user_todos:{user.id}*', f'todo_detail:{todo_id}:{user.id}'])
+                
+            return Response({'id': str(todo.id), 'status': todo.status, 'version': todo.version})
+        except Todo.DoesNotExist:
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+def todo_toggle(request, todo_id):
+    view = TodoToggleView()
+    view.request = request
+    return view.post(request, todo_id)
+
+class TodosBulkView(APIView):
+    @extend_schema(
+        summary="Bulk Todo Operations",
+        description="Perform bulk create/delete operations on todos",
+        tags=["Todos"],
+        request={
+            "type": "object",
+            "properties": {
+                "operations": {
                     "type": "array",
+                    "maxItems": 100,
                     "items": {
                         "oneOf": [
                             {
                                 "type": "object",
                                 "properties": {
-                                    "type": {"type": "string", "enum": ["created"]},
-                                    "id": {"type": "string", "format": "uuid"}
-                                }
+                                    "type": {"type": "string", "enum": ["create"]},
+                                    "list_id": {"type": "string", "format": "uuid"},
+                                    "title": {"type": "string", "maxLength": 255}
+                                },
+                                "required": ["type", "list_id", "title"]
                             },
                             {
                                 "type": "object",
                                 "properties": {
-                                    "type": {"type": "string", "enum": ["deleted"]},
+                                    "type": {"type": "string", "enum": ["delete"]},
                                     "id": {"type": "string", "format": "uuid"}
-                                }
-                            },
-                            {
-                                "type": "object",
-                                "properties": {
-                                    "type": {"type": "string", "enum": ["error"]},
-                                    "message": {"type": "string"}
-                                }
+                                },
+                                "required": ["type", "id"]
                             }
                         ]
                     }
                 }
+            },
+            "required": ["operations"]
+        },
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "results": {
+                        "type": "array",
+                        "items": {
+                            "oneOf": [
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": {"type": "string", "enum": ["created"]},
+                                        "id": {"type": "string", "format": "uuid"}
+                                    }
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": {"type": "string", "enum": ["deleted"]},
+                                        "id": {"type": "string", "format": "uuid"}
+                                    }
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": {"type": "string", "enum": ["error"]},
+                                        "message": {"type": "string"}
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
             }
         }
-    }
-)
-@csrf_protect
-@require_http_methods(["POST"])
-def todos_bulk(request):
-    user = get_user_from_cache(request)
-    if not user:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-    
-    try:
-        data = json.loads(request.body)
-        operations = data.get('operations', [])
+    )
+    def post(self, request):
+        user = get_user_from_cache(request)
+        if not user:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
         
-        if len(operations) > 100:
-            return JsonResponse({'error': 'Too many operations'}, status=400)
-        
-        results = []
-        
-        with transaction.atomic():
-            for op in operations:
-                op_type = op.get('type')
-                
-                if op_type == 'create':
-                    try:
-                        list_obj = List.objects.get(id=op['list_id'], user=user)
-                        todo = Todo.objects.create(list=list_obj, title=op['title'])
-                        results.append({'type': 'created', 'id': str(todo.id)})
-                    except (List.DoesNotExist, KeyError):
-                        results.append({'type': 'error', 'message': 'Invalid create operation'})
-                        
-                elif op_type == 'delete':
-                    try:
-                        Todo.objects.filter(id=op['id'], list__user=user).delete()
-                        results.append({'type': 'deleted', 'id': op['id']})
-                    except KeyError:
-                        results.append({'type': 'error', 'message': 'Invalid delete operation'})
+        try:
+            data = request.data if hasattr(request, 'data') else json.loads(request.body)
+            operations = data.get('operations', [])
             
-            cache.delete_many([f'user_todos:{user.id}*'])
-        
-        return JsonResponse({'results': results})
-    except Exception as e:
-        logger.error(f"Bulk operations error: {e}")
-        return JsonResponse({'error': 'Bulk operation failed'}, status=500)
+            if len(operations) > 100:
+                return Response({'error': 'Too many operations'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            results = []
+            
+            with transaction.atomic():
+                for op in operations:
+                    op_type = op.get('type')
+                    
+                    if op_type == 'create':
+                        try:
+                            list_obj = List.objects.get(id=op['list_id'], user=user)
+                            todo = Todo.objects.create(list=list_obj, title=op['title'])
+                            results.append({'type': 'created', 'id': str(todo.id)})
+                        except (List.DoesNotExist, KeyError):
+                            results.append({'type': 'error', 'message': 'Invalid create operation'})
+                            
+                    elif op_type == 'delete':
+                        try:
+                            Todo.objects.filter(id=op['id'], list__user=user).delete()
+                            results.append({'type': 'deleted', 'id': op['id']})
+                        except KeyError:
+                            results.append({'type': 'error', 'message': 'Invalid delete operation'})
+                
+                cache.delete_many([f'user_todos:{user.id}*'])
+            
+            return Response({'results': results})
+        except Exception as e:
+            logger.error(f"Bulk operations error: {e}")
+            return Response({'error': 'Bulk operation failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+def todos_bulk(request):
+    view = TodosBulkView()
+    view.request = request
+    return view.post(request)
