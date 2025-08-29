@@ -162,181 +162,331 @@ def me(request):
     return JsonResponse({'id': str(user.id), 'email': user.email})
 
 @extend_schema(summary="Lists", tags=["Lists"])
-@require_http_methods(["GET", "POST"])
+@require_http_methods(["GET"])
 def lists(request):
-    user = get_user(request)
+    user = get_user_from_cache(request)
     if not user:
         return JsonResponse({'error': 'Unauthorized'}, status=401)
     
-    if request.method == 'GET':
-        qs = List.objects.filter(user=user).order_by('id')
-        if q := request.GET.get('q'):
-            qs = qs.filter(name__icontains=q)
-        
-        items, cursor = paginate(qs, request)
-        return JsonResponse({
-            'data': [{'id': str(l.id), 'name': l.name, 'color': l.color} for l in items],
-            'next_cursor': cursor
-        })
+    cache_key = f'user_lists:{user.id}'
+    q = request.GET.get('q', '').strip()
+    if q:
+        cache_key += f':search:{q}'
+    
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        return JsonResponse(cached_data)
+    
+    qs = List.objects.filter(user=user).select_related('user').order_by('-created_at')
+    if q:
+        qs = qs.filter(name__icontains=q)
+    
+    items, cursor = paginate(qs, request)
+    data = {
+        'data': [{'id': str(l.id), 'name': l.name, 'color': l.color} for l in items],
+        'next_cursor': cursor
+    }
+    
+    cache.set(cache_key, data, timeout=300)
+    return JsonResponse(data)
+
+@extend_schema(summary="Create List", tags=["Lists"])
+@csrf_protect
+@require_http_methods(["POST"])
+def lists_create(request):
+    user = get_user_from_cache(request)
+    if not user:
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
     
     try:
         data = json.loads(request.body)
-        validate_input(data, {
-            'name': (True, 255, None),
-            'color': (False, 7, r'^#[0-9A-Fa-f]{6}$')
-        })
+        serializer = ListSerializer(data)
+        validated_data = serializer.validate()
         
-        list_obj = List.objects.create(user=user, **data)
+        if not validated_data:
+            return JsonResponse({'errors': serializer.errors}, status=400)
+        
+        with transaction.atomic():
+            list_obj = List.objects.create(user=user, **validated_data)
+            cache.delete_many([f'user_lists:{user.id}*'])
+            
         return JsonResponse({
             'id': str(list_obj.id), 'name': list_obj.name, 'color': list_obj.color
         }, status=201)
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=400)
+        logger.error(f"List creation error: {e}")
+        return JsonResponse({'error': 'Creation failed'}, status=500)
 
 @extend_schema(summary="List Detail", tags=["Lists"])
-@require_http_methods(["GET", "PATCH", "DELETE"])
+@require_http_methods(["GET"])
 def list_detail(request, list_id):
-    user = get_user(request)
+    user = get_user_from_cache(request)
     if not user:
         return JsonResponse({'error': 'Unauthorized'}, status=401)
+    
+    cache_key = f'list_detail:{list_id}:{user.id}'
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        return JsonResponse(cached_data)
     
     try:
         list_obj = List.objects.get(id=list_id, user=user)
+        data = {'id': str(list_obj.id), 'name': list_obj.name, 'color': list_obj.color}
+        cache.set(cache_key, data, timeout=300)
+        return JsonResponse(data)
     except List.DoesNotExist:
         return JsonResponse({'error': 'Not found'}, status=404)
-    
-    if request.method == 'GET':
-        return JsonResponse({'id': str(list_obj.id), 'name': list_obj.name, 'color': list_obj.color})
-    
-    elif request.method == 'PATCH':
-        try:
-            data = json.loads(request.body)
-            validate_input(data, {'name': (False, 255, None), 'color': (False, 7, r'^#[0-9A-Fa-f]{6}$')})
-            for k, v in data.items():
-                setattr(list_obj, k, v)
-            list_obj.save()
-            return JsonResponse({'id': str(list_obj.id), 'name': list_obj.name, 'color': list_obj.color})
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=400)
-    
-    elif request.method == 'DELETE':
-        list_obj.delete()
-        return JsonResponse({}, status=204)
 
-@extend_schema(summary="Todos", tags=["Todos"])
-@require_http_methods(["GET", "POST"])
-def todos(request):
-    user = get_user(request)
+@extend_schema(summary="Update List", tags=["Lists"])
+@csrf_protect
+@require_http_methods(["PATCH"])
+def list_update(request, list_id):
+    user = get_user_from_cache(request)
     if not user:
         return JsonResponse({'error': 'Unauthorized'}, status=401)
     
-    if request.method == 'GET':
-        qs = Todo.objects.filter(list__user=user).order_by('id')
-        for param, field in [('list_id', 'list_id'), ('status', 'status'), ('q', 'title__icontains')]:
-            if val := request.GET.get(param):
-                qs = qs.filter(**{field: val})
+    try:
+        list_obj = List.objects.select_for_update().get(id=list_id, user=user)
+        data = json.loads(request.body)
+        serializer = ListSerializer(data)
+        validated_data = serializer.validate()
         
-        items, cursor = paginate(qs, request)
-        return JsonResponse({
-            'data': [{
-                'id': str(t.id), 'list_id': str(t.list_id), 'title': t.title,
-                'status': t.status, 'priority': t.priority, 'version': t.version
-            } for t in items],
-            'next_cursor': cursor
-        })
+        if not validated_data:
+            return JsonResponse({'errors': serializer.errors}, status=400)
+        
+        with transaction.atomic():
+            for k, v in validated_data.items():
+                if v is not None:
+                    setattr(list_obj, k, v)
+            list_obj.save()
+            cache.delete_many([f'user_lists:{user.id}*', f'list_detail:{list_id}:{user.id}'])
+            
+        return JsonResponse({'id': str(list_obj.id), 'name': list_obj.name, 'color': list_obj.color})
+    except List.DoesNotExist:
+        return JsonResponse({'error': 'Not found'}, status=404)
+    except Exception as e:
+        logger.error(f"List update error: {e}")
+        return JsonResponse({'error': 'Update failed'}, status=500)
+
+@extend_schema(summary="Delete List", tags=["Lists"])
+@csrf_protect
+@require_http_methods(["DELETE"])
+def list_delete(request, list_id):
+    user = get_user_from_cache(request)
+    if not user:
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
+    
+    try:
+        with transaction.atomic():
+            list_obj = List.objects.select_for_update().get(id=list_id, user=user)
+            list_obj.delete()
+            cache.delete_many([f'user_lists:{user.id}*', f'list_detail:{list_id}:{user.id}'])
+        return JsonResponse({}, status=204)
+    except List.DoesNotExist:
+        return JsonResponse({'error': 'Not found'}, status=404)
+
+@extend_schema(summary="Todos", tags=["Todos"])
+@require_http_methods(["GET"])
+def todos(request):
+    user = get_user_from_cache(request)
+    if not user:
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
+    
+    filters = {
+        'list_id': request.GET.get('list_id'),
+        'status': request.GET.get('status'),
+        'q': request.GET.get('q', '').strip()
+    }
+    cache_key = f'user_todos:{user.id}:' + ':'.join(f'{k}={v}' for k, v in filters.items() if v)
+    
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        return JsonResponse(cached_data)
+    
+    qs = Todo.objects.filter(list__user=user).select_related('list').order_by('-updated_at')
+    if filters['list_id']:
+        qs = qs.filter(list_id=filters['list_id'])
+    if filters['status']:
+        qs = qs.filter(status=filters['status'])
+    if filters['q']:
+        qs = qs.filter(title__icontains=filters['q'])
+    
+    items, cursor = paginate(qs, request)
+    data = {
+        'data': [{
+            'id': str(t.id), 'list_id': str(t.list_id), 'title': t.title,
+            'status': t.status, 'priority': t.priority, 'version': t.version
+        } for t in items],
+        'next_cursor': cursor
+    }
+    
+    cache.set(cache_key, data, timeout=120)
+    return JsonResponse(data)
+
+@extend_schema(summary="Create Todo", tags=["Todos"])
+@csrf_protect
+@require_http_methods(["POST"])
+def todos_create(request):
+    user = get_user_from_cache(request)
+    if not user:
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
     
     try:
         data = json.loads(request.body)
-        validate_input(data, {
-            'list_id': (True, 36, r'^[0-9a-f-]{36}$'),
-            'title': (True, 255, None),
-            'status': (False, 5, r'^(open|doing|done)$'),
-            'priority': (False, 1, r'^[1-5]$')
-        })
+        serializer = TodoSerializer(data)
+        validated_data = serializer.validate()
         
-        list_obj = List.objects.get(id=data['list_id'], user=user)
-        todo = Todo.objects.create(list=list_obj, **{k: v for k, v in data.items() if k != 'list_id'})
+        if not validated_data:
+            return JsonResponse({'errors': serializer.errors}, status=400)
+        
+        list_obj = List.objects.get(id=validated_data['list_id'], user=user)
+        with transaction.atomic():
+            todo_data = {k: v for k, v in validated_data.items() if k != 'list_id'}
+            todo = Todo.objects.create(list=list_obj, **todo_data)
+            cache.delete_many([f'user_todos:{user.id}*'])
+            
         return JsonResponse({
             'id': str(todo.id), 'title': todo.title, 'status': todo.status
         }, status=201)
+    except List.DoesNotExist:
+        return JsonResponse({'error': 'List not found'}, status=404)
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=400)
+        logger.error(f"Todo creation error: {e}")
+        return JsonResponse({'error': 'Creation failed'}, status=500)
 
 @extend_schema(summary="Todo Detail", tags=["Todos"])
-@require_http_methods(["GET", "PATCH", "DELETE"])
+@require_http_methods(["GET"])
 def todo_detail(request, todo_id):
-    user = get_user(request)
+    user = get_user_from_cache(request)
     if not user:
         return JsonResponse({'error': 'Unauthorized'}, status=401)
     
+    cache_key = f'todo_detail:{todo_id}:{user.id}'
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        return JsonResponse(cached_data)
+    
     try:
         todo = Todo.objects.get(id=todo_id, list__user=user)
-    except Todo.DoesNotExist:
-        return JsonResponse({'error': 'Not found'}, status=404)
-    
-    if request.method == 'GET':
-        return JsonResponse({
+        data = {
             'id': str(todo.id), 'title': todo.title, 'status': todo.status,
             'priority': todo.priority, 'version': todo.version
-        })
-    
-    elif request.method == 'PATCH':
-        try:
-            data = json.loads(request.body)
-            validate_input(data, {
-                'title': (False, 255, None),
-                'status': (False, 5, r'^(open|doing|done)$'),
-                'priority': (False, 1, r'^[1-5]$')
-            })
-            for k, v in data.items():
-                setattr(todo, k, v)
-            todo.version += 1
-            todo.save()
-            return JsonResponse({'id': str(todo.id), 'version': todo.version})
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=400)
-    
-    elif request.method == 'DELETE':
-        todo.delete()
-        return JsonResponse({}, status=204)
+        }
+        cache.set(cache_key, data, timeout=300)
+        return JsonResponse(data)
+    except Todo.DoesNotExist:
+        return JsonResponse({'error': 'Not found'}, status=404)
 
-@extend_schema(summary="Toggle Todo", tags=["Todos"])
-@require_http_methods(["POST"])
-def todo_toggle(request, todo_id):
-    user = get_user(request)
+@extend_schema(summary="Update Todo", tags=["Todos"])
+@csrf_protect
+@require_http_methods(["PATCH"])
+def todo_update(request, todo_id):
+    user = get_user_from_cache(request)
     if not user:
         return JsonResponse({'error': 'Unauthorized'}, status=401)
     
     try:
-        todo = Todo.objects.get(id=todo_id, list__user=user)
-        todo.status = 'done' if todo.status == 'open' else 'open'
-        todo.version += 1
-        todo.save()
+        todo = Todo.objects.select_for_update().get(id=todo_id, list__user=user)
+        data = json.loads(request.body)
+        data.pop('list_id', None)  # Security: prevent list_id changes
+        
+        serializer = TodoSerializer(data)
+        validated_data = serializer.validate()
+        
+        if not validated_data:
+            return JsonResponse({'errors': serializer.errors}, status=400)
+        
+        with transaction.atomic():
+            for k, v in validated_data.items():
+                if k != 'list_id' and v is not None:
+                    setattr(todo, k, v)
+            todo.version += 1
+            todo.save()
+            cache.delete_many([f'user_todos:{user.id}*', f'todo_detail:{todo_id}:{user.id}'])
+            
+        return JsonResponse({'id': str(todo.id), 'version': todo.version})
+    except Todo.DoesNotExist:
+        return JsonResponse({'error': 'Not found'}, status=404)
+    except Exception as e:
+        logger.error(f"Todo update error: {e}")
+        return JsonResponse({'error': 'Update failed'}, status=500)
+
+@extend_schema(summary="Delete Todo", tags=["Todos"])
+@csrf_protect
+@require_http_methods(["DELETE"])
+def todo_delete(request, todo_id):
+    user = get_user_from_cache(request)
+    if not user:
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
+    
+    try:
+        with transaction.atomic():
+            todo = Todo.objects.select_for_update().get(id=todo_id, list__user=user)
+            todo.delete()
+            cache.delete_many([f'user_todos:{user.id}*', f'todo_detail:{todo_id}:{user.id}'])
+        return JsonResponse({}, status=204)
+    except Todo.DoesNotExist:
+        return JsonResponse({'error': 'Not found'}, status=404)
+
+@extend_schema(summary="Toggle Todo", tags=["Todos"])
+@csrf_protect
+@require_http_methods(["POST"])
+def todo_toggle(request, todo_id):
+    user = get_user_from_cache(request)
+    if not user:
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
+    
+    try:
+        with transaction.atomic():
+            todo = Todo.objects.select_for_update().get(id=todo_id, list__user=user)
+            todo.status = 'done' if todo.status == 'open' else 'open'
+            todo.version += 1
+            todo.save()
+            cache.delete_many([f'user_todos:{user.id}*', f'todo_detail:{todo_id}:{user.id}'])
+            
         return JsonResponse({'id': str(todo.id), 'status': todo.status, 'version': todo.version})
     except Todo.DoesNotExist:
         return JsonResponse({'error': 'Not found'}, status=404)
 
 @extend_schema(summary="Bulk Operations", tags=["Todos"])
+@csrf_protect
 @require_http_methods(["POST"])
 def todos_bulk(request):
-    user = get_user(request)
+    user = get_user_from_cache(request)
     if not user:
         return JsonResponse({'error': 'Unauthorized'}, status=401)
     
     try:
         data = json.loads(request.body)
+        operations = data.get('operations', [])
+        
+        if len(operations) > 100:
+            return JsonResponse({'error': 'Too many operations'}, status=400)
+        
         results = []
         
         with transaction.atomic():
-            for op in data.get('operations', []):
-                if op['type'] == 'create':
-                    list_obj = List.objects.get(id=op['list_id'], user=user)
-                    todo = Todo.objects.create(list=list_obj, title=op['title'])
-                    results.append({'type': 'created', 'id': str(todo.id)})
-                elif op['type'] == 'delete':
-                    Todo.objects.filter(id=op['id'], list__user=user).delete()
-                    results.append({'type': 'deleted', 'id': op['id']})
+            for op in operations:
+                op_type = op.get('type')
+                
+                if op_type == 'create':
+                    try:
+                        list_obj = List.objects.get(id=op['list_id'], user=user)
+                        todo = Todo.objects.create(list=list_obj, title=op['title'])
+                        results.append({'type': 'created', 'id': str(todo.id)})
+                    except (List.DoesNotExist, KeyError):
+                        results.append({'type': 'error', 'message': 'Invalid create operation'})
+                        
+                elif op_type == 'delete':
+                    try:
+                        Todo.objects.filter(id=op['id'], list__user=user).delete()
+                        results.append({'type': 'deleted', 'id': op['id']})
+                    except KeyError:
+                        results.append({'type': 'error', 'message': 'Invalid delete operation'})
+            
+            cache.delete_many([f'user_todos:{user.id}*'])
         
         return JsonResponse({'results': results})
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=400)
+        logger.error(f"Bulk operations error: {e}")
+        return JsonResponse({'error': 'Bulk operation failed'}, status=500)
