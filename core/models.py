@@ -57,7 +57,7 @@ class List(models.Model):
 class Todo(models.Model):
     STATUS_CHOICES = [('open', 'Open'), ('doing', 'Doing'), ('done', 'Done')]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4)
-    list = models.ForeignKey(List, on_delete=models.CASCADE, db_index=True)
+    list = models.ForeignKey(List, on_delete=models.CASCADE, db_index=True, related_name='todos')
     title = models.CharField(max_length=255, db_index=True)
     note = models.TextField(blank=True)
     status = models.CharField(max_length=5, choices=STATUS_CHOICES, default='open', db_index=True)
