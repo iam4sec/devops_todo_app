@@ -18,6 +18,9 @@ COPY . .
 # Create logs directory
 RUN mkdir -p /app/logs
 
+# Make entrypoint script executable
+RUN chmod +x entrypoint.sh
+
 # Collect static files
 RUN python manage.py collectstatic --noinput
 
@@ -28,5 +31,5 @@ USER app
 
 EXPOSE 8000
 
-# Use optimized Gunicorn configuration
+ENTRYPOINT ["./entrypoint.sh"]
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "--worker-class", "sync", "--worker-connections", "1000", "--max-requests", "1000", "--max-requests-jitter", "100", "--timeout", "30", "--keep-alive", "2", "todoapp.wsgi:application"]

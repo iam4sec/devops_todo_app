@@ -64,8 +64,6 @@ DATABASES = {
         'OPTIONS': {
             'sslmode': os.environ.get('DB_SSL_MODE', 'prefer'),
             'connect_timeout': 10,
-            'MAX_CONNS': 20,
-            'MIN_CONNS': 5,
         },
         'CONN_MAX_AGE': 300,
         'CONN_HEALTH_CHECKS': True,
