@@ -3,21 +3,26 @@
 ## System Architecture Diagram
 
 ```mermaid
-graph LR
-    Client["Client<br/>(API Consumer)"] 
-    Nginx["Nginx<br/>Reverse Proxy"]
-    Django["Django<br/>REST API"]
-    PostgreSQL["PostgreSQL<br/>Database"]
+graph TB
+    Client["Client<br/>(Browser/API Consumer)"]
     
-    Client -->|"HTTPS/443"| Nginx
-    Nginx -->|"HTTP/8000"| Django
-    Django -->|"TCP/5432"| PostgreSQL
+    subgraph Docker["Docker Environment"]
+        Nginx["Nginx Container<br/>Port 80"]
+        Django["Django App Container<br/>Port 8000"]
+        Redis["Redis Container<br/>Sessions & Cache"]
+        PostgreSQL["PostgreSQL Container<br/>Database"]
+    end
     
-    subgraph Security["Security Layers"]
-        SSL["SSL/TLS"]
-        Auth["Authentication"]
-        CSRF["CSRF Protection"]
-        Rate["Rate Limiting"]
+    Client -->|"HTTP/80<br/>Rate Limited"| Nginx
+    Nginx -->|"Proxy Pass<br/>Load Balancing"| Django
+    Django -->|"Session Storage<br/>Caching"| Redis
+    Django -->|"ORM Queries<br/>Connection Pool"| PostgreSQL
+    
+    subgraph Security["Security Features"]
+        RateLimit["Rate Limiting<br/>5/min login, 10/min auth, 100/min API"]
+        Headers["Security Headers<br/>X-Frame-Options, CSRF"]
+        Auth["Cookie Authentication<br/>Argon2 Hashing"]
+        Validation["Input Validation<br/>Request Size Limits"]
     end
 ```
 
@@ -41,110 +46,120 @@ graph LR
 
 ### 2. Web Server Layer (Nginx)
 
-**Version**: Nginx 1.18+
-**Configuration**: `/etc/nginx/sites-available/todoapp`
+**Container**: nginx:alpine
+**Configuration**: `/nginx/nginx.conf`
 
 **Core Functions**:
-
-#### SSL/TLS Termination
-- **Protocol**: TLS 1.2/1.3
-- **Cipher Suites**: Modern, secure algorithms only
-- **Certificate Management**: Let's Encrypt or commercial CA
-- **HSTS**: Strict-Transport-Security header enforcement
 
 #### Reverse Proxy Configuration
 ```nginx
 upstream django_app {
-    server 127.0.0.1:8000;
-    # Additional servers for load balancing
+    server app1:8000;
 }
 ```
 
 #### Rate Limiting Implementation
-- **Login endpoints**: 5 requests/minute per IP
-- **Auth endpoints**: 10 requests/minute per IP
-- **API endpoints**: 100 requests/minute per IP
-- **Burst handling**: Allow temporary spikes with delay
+- **Login endpoints**: 5 requests/minute per IP (burst=3)
+- **Auth endpoints**: 10 requests/minute per IP (burst=5)
+- **API endpoints**: 100 requests/minute per IP (burst=20)
+- **Zone-based limiting**: Separate zones for different endpoint types
 
-#### Static File Optimization
-- **Gzip compression**: 6-9 compression level
-- **Browser caching**: Long-term cache headers
-- **HTTP/2**: Multiplexing and server push
+#### Static File Serving
+- **Static files**: `/app/staticfiles/` with 1-year cache
+- **Media files**: `/app/media/` with 30-day cache
+- **Gzip compression**: Enabled for text/json/js/css
 
 #### Security Headers
 ```nginx
-add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-add_header X-Frame-Options "SAMEORIGIN" always;
-add_header X-Content-Type-Options "nosniff" always;
-add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header X-Frame-Options DENY always;
+add_header X-Content-Type-Options nosniff always;
+add_header Referrer-Policy no-referrer always;
+add_header X-XSS-Protection "1; mode=block" always;
 ```
 
 ### 3. Application Layer (Django)
 
-**Framework**: Django 4.2+ with Django REST Framework
-**WSGI Server**: Gunicorn with multiple workers
+**Container**: Custom Django app
+**Framework**: Django with Django REST Framework
+**Documentation**: drf-spectacular (Swagger/OpenAPI)
 
 #### Core Components
 
 **Models**:
-- `User`: Extended Django user model
-- `TodoList`: Container for todos
-- `Todo`: Individual task items
+- `User`: Custom user model with UUID primary key, email authentication
+- `Session`: Custom session model with IP tracking and expiration
+- `List`: Todo list container with user association and color support
+- `Todo`: Individual task items with status, priority, and versioning
 
 **Authentication System**:
-- **Session-based**: Django's built-in session framework
-- **Password Hashing**: Argon2 algorithm (OWASP recommended)
-- **CSRF Protection**: Token-based validation
-- **Cookie Security**: HttpOnly, Secure, SameSite attributes
+- **Custom session management**: Redis-backed with IP validation
+- **Password Hashing**: Argon2 (single hasher for performance)
+- **CSRF Protection**: Token-based with HttpOnly cookies
+- **Cookie Security**: HttpOnly, Secure, SameSite=Lax
 
 **API Architecture**:
-- **REST Principles**: Resource-based URLs, HTTP methods
-- **Serialization**: DRF serializers for data validation
-- **Pagination**: Cursor-based for large datasets
-- **Filtering**: Query parameter support
+- **Class-based views**: APIView with OpenAPI documentation
+- **Custom serializers**: Input validation and data transformation
+- **Cursor pagination**: JSON-based pagination for performance
+- **Caching strategy**: Redis caching for user data and queries
 
-**Security Middleware Stack**:
-1. SecurityMiddleware (HSTS, content type options)
-2. SessionMiddleware (session management)
-3. CsrfViewMiddleware (CSRF protection)
-4. AuthenticationMiddleware (user authentication)
-5. Custom rate limiting middleware
+**Middleware Stack**:
+1. `OptimizedMiddleware` (custom performance middleware)
+2. `SecurityMiddleware` (Django security features)
+3. `SessionMiddleware` (session management)
+4. `CommonMiddleware` (common request processing)
+5. `CsrfViewMiddleware` (CSRF protection)
+6. `AuthenticationMiddleware` (user authentication)
 
 **Database Operations**:
-- **ORM**: Django's database abstraction layer
-- **Migrations**: Version-controlled schema changes
-- **Connection Pooling**: Persistent database connections
-- **Query Optimization**: Select_related, prefetch_related
+- **Optimized queries**: select_related, prefetch_related usage
+- **Connection pooling**: CONN_MAX_AGE=300, health checks enabled
+- **Database indexes**: Strategic indexing on frequently queried fields
+- **Atomic transactions**: Database consistency with transaction.atomic()
 
 ### 4. Database Layer (PostgreSQL)
 
-**Version**: PostgreSQL 13+
-**Configuration**: Optimized for web application workloads
+**Container**: postgres:15
+**Configuration**: Docker-based with health checks
 
 #### Database Design
 
 **Tables**:
-- `auth_user`: User accounts and authentication
-- `todo_todolist`: Todo list containers
-- `todo_todo`: Individual todo items
-- `django_session`: Session storage
+- `core_user`: Custom user model with UUID and email authentication
+- `core_session`: Custom session tracking with IP and expiration
+- `core_list`: Todo list containers with user association
+- `core_todo`: Individual todo items with status and priority
 
 **Indexing Strategy**:
-- Primary keys: B-tree indexes
-- Foreign keys: Automatic indexing
-- Query-specific: Composite indexes for common filters
+- **UUID primary keys**: All models use UUID for security
+- **Composite indexes**: User+created_at, user+name, list+status combinations
+- **Query optimization**: Indexes on frequently filtered fields (status, priority, due_date)
 
 **Security Features**:
-- **Connection encryption**: SSL/TLS for data in transit
-- **Role-based access**: Dedicated application user
-- **Password authentication**: SCRAM-SHA-256
-- **Network isolation**: Firewall rules, private networks
+- **SSL connections**: sslmode=prefer with 10s timeout
+- **Network isolation**: Container-only access, no exposed ports
+- **Health monitoring**: pg_isready health checks
 
 #### Performance Optimizations
-- **Connection pooling**: PgBouncer for connection management
-- **Query optimization**: EXPLAIN ANALYZE for slow queries
-- **Vacuum scheduling**: Automated maintenance
-- **Backup strategy**: Point-in-time recovery
+- **Connection pooling**: Django CONN_MAX_AGE=300 with health checks
+- **Persistent connections**: Reduced connection overhead
+- **Strategic indexing**: Performance-focused index design
+
+### 5. Caching Layer (Redis)
+
+**Container**: redis:7-alpine
+**Purpose**: Session storage and application caching
+
+#### Caching Strategy
+- **Session backend**: Django sessions stored in Redis
+- **User data caching**: Lists and todos cached for 300s/120s
+- **Connection pooling**: max_connections=20 with retry logic
+- **Cache invalidation**: Pattern-based cache deletion on updates
+
+#### Performance Features
+- **Memory optimization**: Alpine image for minimal footprint
+- **Health monitoring**: Redis ping health checks
+- **Persistent storage**: Data volume for session persistence
 
 ## Data Flow Architecture
 
@@ -260,44 +275,45 @@ graph TB
 
 ```mermaid
 graph TB
-    CDN["CDN Static Assets"]
-    LB["Load Balancer Nginx"]
+    LB["Load Balancer"]
     
-    subgraph App["Application Tier"]
-        D1["Django 1"]
-        D2["Django 2"]
-        D3["Django 3"]
+    subgraph Current["Current Implementation"]
+        Nginx1["Nginx Container"]
+        App1["Django App Container"]
+        Redis1["Redis Container"]
+        DB1["PostgreSQL Container"]
     end
     
-    subgraph Cache["Caching Layer"]
-        Redis["Redis Sessions"]
+    subgraph Scaling["Horizontal Scaling Options"]
+        direction TB
+        Nginx2["Nginx Load Balancer"]
+        App2["Django App 1"]
+        App3["Django App 2"]
+        App4["Django App 3"]
+        Redis2["Redis Cluster"]
+        DB2["PostgreSQL Master"]
+        DB3["PostgreSQL Replica"]
     end
     
-    subgraph DB["Database Tier"]
-        Master["PostgreSQL Master"]
-        Replica1["PostgreSQL Replica 1"]
-        Replica2["PostgreSQL Replica 2"]
-    end
+    LB --> Nginx1
+    Nginx1 --> App1
+    App1 --> Redis1
+    App1 --> DB1
     
-    CDN --> LB
-    LB --> D1
-    LB --> D2
-    LB --> D3
-    
-    D1 --> Redis
-    D2 --> Redis
-    D3 --> Redis
-    
-    D1 --> Master
-    D2 --> Master
-    D3 --> Master
-    
-    D1 --> Replica1
-    D2 --> Replica1
-    D3 --> Replica2
-    
-    Master -.->|Replication| Replica1
-    Master -.->|Replication| Replica2
+    LB -.->|"Future Scaling"| Nginx2
+    Nginx2 -.-> App2
+    Nginx2 -.-> App3
+    Nginx2 -.-> App4
+    App2 -.-> Redis2
+    App3 -.-> Redis2
+    App4 -.-> Redis2
+    App2 -.-> DB2
+    App3 -.-> DB2
+    App4 -.-> DB2
+    App2 -.-> DB3
+    App3 -.-> DB3
+    App4 -.-> DB3
+    DB2 -.->|"Replication"| DB3
 ```
 
 ### Performance Monitoring
@@ -308,16 +324,38 @@ graph TB
 
 ## Deployment Strategy
 
-### Containerization (Docker)
-- **Multi-stage builds**: Optimized image sizes
-- **Health checks**: Container lifecycle management
-- **Environment variables**: Configuration management
-- **Volume mounts**: Data persistence
+### Current Docker Implementation
 
-### Infrastructure as Code
-- **Docker Compose**: Local development environment
-- **Production deployment**: Kubernetes or Docker Swarm
-- **CI/CD pipeline**: Automated testing and deployment
-- **Monitoring**: Prometheus, Grafana, ELK stack
+**Services**:
+- **app1**: Django application container with health checks
+- **db**: PostgreSQL 15 container with data persistence
+- **redis**: Redis 7 Alpine container for caching
+- **nginx**: Nginx Alpine container for reverse proxy
 
-This architecture ensures high availability, security, and maintainability while providing a solid foundation for future scaling requirements.
+**Key Features**:
+- **Health checks**: All services have proper health monitoring
+- **Volume persistence**: postgres_data, redis_data, static_volume, media_volume
+- **Environment configuration**: .env file for secrets management
+- **Service dependencies**: Proper startup order with health conditions
+- **Network isolation**: Internal container communication only
+
+**Security Measures**:
+- **No exposed database ports**: PostgreSQL only accessible internally
+- **Static file serving**: Nginx handles static/media files efficiently
+- **Environment secrets**: Database passwords and keys via environment variables
+
+### Deployment Commands
+```bash
+# Quick deployment
+./deploy.sh
+
+# Manual deployment
+docker-compose up -d
+```
+
+**Access Points**:
+- **Application**: http://localhost:8000 (via Nginx)
+- **API Documentation**: http://localhost:8000/api/docs/
+- **Static Documentation**: http://localhost:8000/docs/
+
+This architecture provides a production-ready containerized environment with proper security, caching, and scalability foundations.
