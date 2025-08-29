@@ -140,11 +140,46 @@ MEDIA_ROOT = '/app/media/'
 # Swagger/OpenAPI settings
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Todo App API',
-    'DESCRIPTION': 'Minimal Django todo app with cookie-based authentication, PostgreSQL, and REST API.',
+    'DESCRIPTION': '''Minimal Django todo app with cookie-based authentication, PostgreSQL, and REST API.
+    
+## Authentication
+This API uses cookie-based authentication. First get a CSRF token, then login to receive session cookies.
+
+## Security Features
+- Argon2 password hashing
+- HttpOnly, Secure cookies
+- CSRF protection
+- Rate limiting
+- Security headers (HSTS, X-Frame-Options, etc.)
+- Request validation
+- Idempotency keys
+
+## Pagination
+List endpoints support cursor-based pagination using the `cursor` parameter.
+
+## Error Handling
+All endpoints return consistent error responses with appropriate HTTP status codes.''',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
     'SCHEMA_PATH_PREFIX': r'/api/v[0-9]',
+    'TAGS': [
+        {'name': 'Auth', 'description': 'Authentication endpoints'},
+        {'name': 'User', 'description': 'User profile endpoints'},
+        {'name': 'Lists', 'description': 'Todo list management'},
+        {'name': 'Todos', 'description': 'Todo item management'},
+    ],
+    'SERVERS': [
+        {'url': 'http://localhost:8000', 'description': 'Development server'},
+        {'url': 'https://your-domain.com', 'description': 'Production server'},
+    ],
+    'CONTACT': {
+        'name': 'API Support',
+        'email': 'support@example.com',
+    },
+    'LICENSE': {
+        'name': 'MIT License',
+    },
 }
 
 # Logging
