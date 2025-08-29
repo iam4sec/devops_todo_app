@@ -25,19 +25,6 @@ services:
     ports:
       - "8000:8000"
 
-  app2:
-    build: .
-    environment:
-      - DEBUG=False
-      - DB_HOST=db
-    depends_on:
-      - db
-    volumes:
-      - static_volume:/app/staticfiles
-      - media_volume:/app/media
-    ports:
-      - "8001:8000"
-
   nginx:
     image: nginx:alpine
     ports:
@@ -51,7 +38,6 @@ services:
       - media_volume:/app/media
     depends_on:
       - app1
-      - app2
 
 volumes:
   postgres_data:
