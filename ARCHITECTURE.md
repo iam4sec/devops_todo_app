@@ -4,20 +4,20 @@
 
 ```mermaid
 graph LR
-    Client["🌐 Client<br/>(API Consumer)"] 
-    Nginx["⚡ Nginx<br/>Reverse Proxy"]
-    Django["🐍 Django<br/>REST API"]
-    PostgreSQL["🐘 PostgreSQL<br/>Database"]
+    Client["Client<br/>(API Consumer)"] 
+    Nginx["Nginx<br/>Reverse Proxy"]
+    Django["Django<br/>REST API"]
+    PostgreSQL["PostgreSQL<br/>Database"]
     
-    Client -->|"HTTPS/443<br/>• HTTP Requests<br/>• CSRF Token<br/>• Session Cookies"| Nginx
-    Nginx -->|"HTTP/8000<br/>• SSL Termination<br/>• Rate Limiting<br/>• Security Headers"| Django
-    Django -->|"TCP/5432<br/>• REST API<br/>• Authentication<br/>• ORM Operations"| PostgreSQL
+    Client -->|"HTTPS/443"| Nginx
+    Nginx -->|"HTTP/8000"| Django
+    Django -->|"TCP/5432"| PostgreSQL
     
-    subgraph "Security Layers"
-        SSL["🔒 SSL/TLS"]
-        Auth["🔐 Authentication"]
-        CSRF["🛡️ CSRF Protection"]
-        Rate["⏱️ Rate Limiting"]
+    subgraph Security["Security Layers"]
+        SSL["SSL/TLS"]
+        Auth["Authentication"]
+        CSRF["CSRF Protection"]
+        Rate["Rate Limiting"]
     end
 ```
 
@@ -175,7 +175,7 @@ sequenceDiagram
     participant D as Django
     participant P as PostgreSQL
     
-    C->>N: GET /api/todos/ (with session)
+    C->>N: GET /api/todos/
     N->>N: Add security headers
     N->>D: Forward request
     D->>D: Authentication check
@@ -198,7 +198,7 @@ sequenceDiagram
     
     Note over C: Store token
     
-    C->>D: POST request (with token)
+    C->>D: POST request with token
     D->>D: Validate CSRF token
     alt Token valid
         D-->>C: Process request
@@ -213,32 +213,32 @@ sequenceDiagram
 
 ```mermaid
 graph TB
-    subgraph "Layer 1: Network Security"
-        FW["🔥 Firewall Rules<br/>Ports 80, 443 only"]
-        DDOS["🛡️ DDoS Protection"]
-        IP["📋 IP Whitelisting"]
+    subgraph L1["Layer 1: Network Security"]
+        FW["Firewall Rules"]
+        DDOS["DDoS Protection"]
+        IP["IP Whitelisting"]
     end
     
-    subgraph "Layer 2: Web Server Security"
-        RL["⏱️ Rate Limiting"]
-        SIZE["📏 Request Size Limits"]
-        HEADERS["🔒 Security Headers"]
-        TLS["🔐 SSL/TLS Encryption"]
+    subgraph L2["Layer 2: Web Server Security"]
+        RL["Rate Limiting"]
+        SIZE["Request Size Limits"]
+        HEADERS["Security Headers"]
+        TLS["SSL/TLS Encryption"]
     end
     
-    subgraph "Layer 3: Application Security"
-        VALID["✅ Input Validation"]
-        SQL["🚫 SQL Injection Prevention"]
-        XSS["🛡️ XSS Protection"]
-        CSRF_P["🔑 CSRF Validation"]
-        SESSION["🍪 Session Security"]
+    subgraph L3["Layer 3: Application Security"]
+        VALID["Input Validation"]
+        SQL["SQL Injection Prevention"]
+        XSS["XSS Protection"]
+        CSRF_P["CSRF Validation"]
+        SESSION["Session Security"]
     end
     
-    subgraph "Layer 4: Database Security"
-        ENCRYPT["🔒 Connection Encryption"]
-        PRIV["👤 Least Privilege"]
-        LOG["📊 Query Logging"]
-        UPDATE["🔄 Security Updates"]
+    subgraph L4["Layer 4: Database Security"]
+        ENCRYPT["Connection Encryption"]
+        PRIV["Least Privilege"]
+        LOG["Query Logging"]
+        UPDATE["Security Updates"]
     end
     
     FW --> RL
@@ -260,23 +260,23 @@ graph TB
 
 ```mermaid
 graph TB
-    CDN["🌐 CDN<br/>Static Assets"]
-    LB["⚖️ Load Balancer<br/>Nginx"]
+    CDN["CDN Static Assets"]
+    LB["Load Balancer Nginx"]
     
-    subgraph "Application Tier"
-        D1["🐍 Django 1"]
-        D2["🐍 Django 2"]
-        D3["🐍 Django 3"]
+    subgraph App["Application Tier"]
+        D1["Django 1"]
+        D2["Django 2"]
+        D3["Django 3"]
     end
     
-    subgraph "Caching Layer"
-        Redis["🔴 Redis<br/>Sessions & Cache"]
+    subgraph Cache["Caching Layer"]
+        Redis["Redis Sessions"]
     end
     
-    subgraph "Database Tier"
-        Master["🐘 PostgreSQL<br/>Master"]
-        Replica1["🐘 PostgreSQL<br/>Read Replica 1"]
-        Replica2["🐘 PostgreSQL<br/>Read Replica 2"]
+    subgraph DB["Database Tier"]
+        Master["PostgreSQL Master"]
+        Replica1["PostgreSQL Replica 1"]
+        Replica2["PostgreSQL Replica 2"]
     end
     
     CDN --> LB
