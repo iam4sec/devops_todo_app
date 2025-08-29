@@ -10,7 +10,7 @@ WORKDIR /app
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt django-sslserver
 
 # Copy application code
 COPY . .
@@ -29,7 +29,7 @@ RUN useradd --create-home --shell /bin/bash app && \
     chown -R app:app /app
 USER app
 
-EXPOSE 8000
+EXPOSE 8000 8443
 
 ENTRYPOINT ["./entrypoint.sh"]
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "--worker-class", "sync", "--worker-connections", "1000", "--max-requests", "1000", "--max-requests-jitter", "100", "--timeout", "30", "--keep-alive", "2", "todoapp.wsgi:application"]
+CMD ["python", "manage.py", "runsslserver", "0.0.0.0:8443", "--certificate", "ssl/cert.pem", "--key", "ssl/key.pem"]

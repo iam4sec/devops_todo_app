@@ -17,6 +17,7 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExampl
 from drf_spectacular.openapi import OpenApiTypes
 from .models import User, Session, List, Todo
 from .serializers import LoginSerializer, ListSerializer, TodoSerializer, RegisterSerializer, LoginRequestSerializer, ListCreateSerializer, TodoCreateSerializer, TodoUpdateSerializer, TodosBulkSerializer
+from .utils import success_response, created_response, error_response
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,12 @@ class CSRFTokenView(APIView):
         }
     )
     def get(self, request):
-        return Response({'csrfToken': get_token(request)})
+        return success_response(
+            message="CSRF token retrieved",
+            code="CSRF_TOKEN_SUCCESS",
+            data={'csrfToken': get_token(request)},
+            path=request.path
+        )
 
 # Keep function-based view for backward compatibility
 @ensure_csrf_cookie
@@ -191,19 +197,34 @@ class RegisterView(APIView):
                 errors['password_confirm'] = 'Passwords do not match'
                 
             if errors:
-                return Response({'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+                return error_response(
+                    message="Validation failed",
+                    code="VALIDATION_ERROR",
+                    data={'errors': errors},
+                    path=request.path
+                )
             
             with transaction.atomic():
                 user = User.objects.create_user(email=email, password=password)
                 
-            return Response({
-                'user_id': str(user.id),
-                'email': user.email
-            }, status=status.HTTP_201_CREATED)
+            return created_response(
+                message="User registered successfully",
+                code="REGISTRATION_SUCCESSFUL",
+                data={
+                    'user_id': str(user.id),
+                    'email': user.email
+                },
+                path=request.path
+            )
             
         except Exception as e:
             logger.error(f"Registration error: {e}")
-            return Response({'error': 'Registration failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return error_response(
+                message="Registration failed",
+                code="REGISTRATION_ERROR",
+                path=request.path,
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class LoginView(APIView):
     @extend_schema(
@@ -242,7 +263,12 @@ class LoginView(APIView):
             validated_data = serializer.validate()
             
             if not validated_data:
-                return Response({'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+                return error_response(
+                    message="Login validation failed",
+                    code="LOGIN_VALIDATION_ERROR",
+                    data={'errors': serializer.errors},
+                    path=request.path
+                )
             
             user = validated_data['user']
             ip = get_ip(request)
@@ -262,7 +288,12 @@ class LoginView(APIView):
                 'ip': ip
             }, timeout=settings.SESSION_COOKIE_AGE)
             
-            response = Response({'user_id': str(user.id)})
+            response = success_response(
+                message="Login successful",
+                code="LOGIN_SUCCESS",
+                data={'user_id': str(user.id)},
+                path=request.path
+            )
             response.set_cookie(
                 'sid', str(session.id), 
                 max_age=settings.SESSION_COOKIE_AGE,
@@ -275,10 +306,19 @@ class LoginView(APIView):
             return response
             
         except json.JSONDecodeError:
-            return Response({'error': 'Invalid JSON'}, status=status.HTTP_400_BAD_REQUEST)
+            return error_response(
+                message="Invalid JSON format",
+                code="INVALID_JSON",
+                path=request.path
+            )
         except Exception as e:
             logger.error(f"Login error: {e}")
-            return Response({'error': 'Login failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return error_response(
+                message="Login failed",
+                code="LOGIN_ERROR",
+                path=request.path,
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 # Keep function-based view for backward compatibility
 def login(request):
@@ -307,7 +347,12 @@ class LogoutView(APIView):
             cache.delete(f'session:{sid}')
             logger.info(f"User logged out, session {sid} deleted")
         
-        response = Response({'logged_out': True})
+        response = success_response(
+            message="Logout successful",
+            code="LOGOUT_SUCCESS",
+            data={'logged_out': True},
+            path=request.path
+        )
         response.delete_cookie('sid')
         return response
 
@@ -340,7 +385,12 @@ class RefreshView(APIView):
     def post(self, request):
         user = get_user_from_cache(request)
         if not user:
-            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+            return error_response(
+                message="Unauthorized access",
+                code="UNAUTHORIZED",
+                path=request.path,
+                status_code=status.HTTP_401_UNAUTHORIZED
+            )
         
         sid = request.COOKIES.get('sid')
         if sid:
@@ -356,7 +406,12 @@ class RefreshView(APIView):
                     'ip': session.ip
                 }, timeout=settings.SESSION_COOKIE_AGE)
                 
-                response = Response({'refreshed': True})
+                response = success_response(
+                    message="Session refreshed",
+                    code="REFRESH_SUCCESS",
+                    data={'refreshed': True},
+                    path=request.path
+                )
                 response.set_cookie(
                     'sid', str(session.id),
                     max_age=settings.SESSION_COOKIE_AGE,
@@ -368,7 +423,12 @@ class RefreshView(APIView):
             except Session.DoesNotExist:
                 pass
         
-        return Response({'error': 'Session not found'}, status=status.HTTP_401_UNAUTHORIZED)
+        return error_response(
+            message="Session not found",
+            code="SESSION_NOT_FOUND",
+            path=request.path,
+            status_code=status.HTTP_401_UNAUTHORIZED
+        )
 
 def refresh(request):
     view = RefreshView()
@@ -400,8 +460,18 @@ class MeView(APIView):
     def get(self, request):
         user = get_user_from_cache(request)
         if not user:
-            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
-        return Response({'id': str(user.id), 'email': user.email})
+            return error_response(
+                message="Unauthorized access",
+                code="UNAUTHORIZED",
+                path=request.path,
+                status_code=status.HTTP_401_UNAUTHORIZED
+            )
+        return success_response(
+            message="User profile retrieved",
+            code="PROFILE_SUCCESS",
+            data={'id': str(user.id), 'email': user.email},
+            path=request.path
+        )
 
 # Keep function-based view for backward compatibility
 def me(request):
@@ -442,7 +512,12 @@ class ListsView(APIView):
     def get(self, request):
         user = get_user_from_cache(request)
         if not user:
-            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+            return error_response(
+                message="Unauthorized access",
+                code="UNAUTHORIZED",
+                path=request.path,
+                status_code=status.HTTP_401_UNAUTHORIZED
+            )
         
         cache_key = f'user_lists:{user.id}'
         q = request.GET.get('q', '').strip()
@@ -468,8 +543,17 @@ class ListsView(APIView):
             'next_cursor': cursor
         }
         
-        cache.set(cache_key, data, timeout=300)
-        return Response(data)
+        response_data = {
+            'lists': data['data'],
+            'next_cursor': data['next_cursor']
+        }
+        cache.set(cache_key, response_data, timeout=300)
+        return success_response(
+            message="Lists retrieved successfully",
+            code="LISTS_SUCCESS",
+            data=response_data,
+            path=request.path
+        )
     
     @extend_schema(
         summary="Create List",
@@ -500,7 +584,12 @@ class ListsView(APIView):
     def post(self, request):
         user = get_user_from_cache(request)
         if not user:
-            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+            return error_response(
+                message="Unauthorized access",
+                code="UNAUTHORIZED",
+                path=request.path,
+                status_code=status.HTTP_401_UNAUTHORIZED
+            )
         
         try:
             data = request.data if hasattr(request, 'data') else json.loads(request.body)
@@ -508,21 +597,36 @@ class ListsView(APIView):
             validated_data = serializer.validate()
             
             if not validated_data:
-                return Response({'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+                return error_response(
+                    message="Validation failed",
+                    code="VALIDATION_ERROR",
+                    data={'errors': serializer.errors},
+                    path=request.path
+                )
             
             with transaction.atomic():
                 list_obj = List.objects.create(user=user, **validated_data)
                 cache.delete_many([f'user_lists:{user.id}*'])
                 
-            return Response({
-                'id': str(list_obj.id), 
-                'name': list_obj.name, 
-                'color': list_obj.color,
-                'todo_count': 0
-            }, status=status.HTTP_201_CREATED)
+            return created_response(
+                message="List created successfully",
+                code="LIST_CREATED",
+                data={
+                    'id': str(list_obj.id), 
+                    'name': list_obj.name, 
+                    'color': list_obj.color,
+                    'todo_count': 0
+                },
+                path=request.path
+            )
         except Exception as e:
             logger.error(f"List creation error: {e}")
-            return Response({'error': 'Creation failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return error_response(
+                message="List creation failed",
+                code="LIST_CREATION_ERROR",
+                path=request.path,
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 # Keep function-based view for backward compatibility
 def lists(request):
@@ -573,7 +677,12 @@ class ListDetailView(APIView):
     def get(self, request, list_id):
         user = get_user_from_cache(request)
         if not user:
-            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+            return error_response(
+                message="Unauthorized access",
+                code="UNAUTHORIZED",
+                path=request.path,
+                status_code=status.HTTP_401_UNAUTHORIZED
+            )
         
         try:
             list_obj = List.objects.prefetch_related('todos').get(id=list_id, user=user)
@@ -591,9 +700,19 @@ class ListDetailView(APIView):
                     'priority': t.priority
                 } for t in todos]
             }
-            return Response(data)
+            return success_response(
+                message="List details retrieved",
+                code="LIST_DETAILS_SUCCESS",
+                data=data,
+                path=request.path
+            )
         except List.DoesNotExist:
-            return Response({'error': 'List not found'}, status=status.HTTP_404_NOT_FOUND)
+            return error_response(
+                message="List not found",
+                code="LIST_NOT_FOUND",
+                path=request.path,
+                status_code=status.HTTP_404_NOT_FOUND
+            )
     
     @extend_schema(
         summary="Update List",
@@ -623,7 +742,12 @@ class ListDetailView(APIView):
     def put(self, request, list_id):
         user = get_user_from_cache(request)
         if not user:
-            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+            return error_response(
+                message="Unauthorized access",
+                code="UNAUTHORIZED",
+                path=request.path,
+                status_code=status.HTTP_401_UNAUTHORIZED
+            )
         
         try:
             list_obj = List.objects.select_for_update().get(id=list_id, user=user)
@@ -632,7 +756,12 @@ class ListDetailView(APIView):
             validated_data = serializer.validate()
             
             if not validated_data:
-                return Response({'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+                return error_response(
+                    message="Validation failed",
+                    code="VALIDATION_ERROR",
+                    data={'errors': serializer.errors},
+                    path=request.path
+                )
             
             with transaction.atomic():
                 for k, v in validated_data.items():
@@ -641,12 +770,27 @@ class ListDetailView(APIView):
                 list_obj.save()
                 cache.delete_many([f'user_lists:{user.id}*', f'list_detail:{list_id}:{user.id}'])
                 
-            return Response({'id': str(list_obj.id), 'name': list_obj.name, 'color': list_obj.color})
+            return success_response(
+                message="List updated successfully",
+                code="LIST_UPDATED",
+                data={'id': str(list_obj.id), 'name': list_obj.name, 'color': list_obj.color},
+                path=request.path
+            )
         except List.DoesNotExist:
-            return Response({'error': 'List not found'}, status=status.HTTP_404_NOT_FOUND)
+            return error_response(
+                message="List not found",
+                code="LIST_NOT_FOUND",
+                path=request.path,
+                status_code=status.HTTP_404_NOT_FOUND
+            )
         except Exception as e:
             logger.error(f"List update error: {e}")
-            return Response({'error': 'Update failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return error_response(
+                message="List update failed",
+                code="LIST_UPDATE_ERROR",
+                path=request.path,
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
     @extend_schema(
         summary="Delete List",
@@ -665,16 +809,30 @@ class ListDetailView(APIView):
     def delete(self, request, list_id):
         user = get_user_from_cache(request)
         if not user:
-            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+            return error_response(
+                message="Unauthorized access",
+                code="UNAUTHORIZED",
+                path=request.path,
+                status_code=status.HTTP_401_UNAUTHORIZED
+            )
         
         try:
             with transaction.atomic():
                 list_obj = List.objects.select_for_update().get(id=list_id, user=user)
                 list_obj.delete()
                 cache.delete_many([f'user_lists:{user.id}*', f'list_detail:{list_id}:{user.id}'])
-            return Response(status=status.HTTP_204_NO_CONTENT)
+            return success_response(
+                message="List deleted successfully",
+                code="LIST_DELETED",
+                path=request.path
+            )
         except List.DoesNotExist:
-            return Response({'error': 'List not found'}, status=status.HTTP_404_NOT_FOUND)
+            return error_response(
+                message="List not found",
+                code="LIST_NOT_FOUND",
+                path=request.path,
+                status_code=status.HTTP_404_NOT_FOUND
+            )
 
 def list_detail(request, list_id):
     view = ListDetailView()
@@ -727,7 +885,12 @@ class TodosView(APIView):
     def get(self, request):
         user = get_user_from_cache(request)
         if not user:
-            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+            return error_response(
+                message="Unauthorized access",
+                code="UNAUTHORIZED",
+                path=request.path,
+                status_code=status.HTTP_401_UNAUTHORIZED
+            )
         
         filters = {
             'list_id': request.GET.get('list_id'),
@@ -763,8 +926,17 @@ class TodosView(APIView):
             'next_cursor': cursor
         }
         
-        cache.set(cache_key, data, timeout=120)
-        return Response(data)
+        response_data = {
+            'todos': data['data'],
+            'next_cursor': data['next_cursor']
+        }
+        cache.set(cache_key, response_data, timeout=120)
+        return success_response(
+            message="Todos retrieved successfully",
+            code="TODOS_SUCCESS",
+            data=response_data,
+            path=request.path
+        )
     
     @extend_schema(
         summary="Create Todo",
@@ -798,7 +970,12 @@ class TodosView(APIView):
     def post(self, request):
         user = get_user_from_cache(request)
         if not user:
-            return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+            return error_response(
+                message="Unauthorized access",
+                code="UNAUTHORIZED",
+                path=request.path,
+                status_code=status.HTTP_401_UNAUTHORIZED
+            )
         
         try:
             data = request.data if hasattr(request, 'data') else json.loads(request.body)
@@ -806,7 +983,12 @@ class TodosView(APIView):
             validated_data = serializer.validate()
             
             if not validated_data:
-                return Response({'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+                return error_response(
+                    message="Validation failed",
+                    code="VALIDATION_ERROR",
+                    data={'errors': serializer.errors},
+                    path=request.path
+                )
             
             list_obj = List.objects.get(id=validated_data['list_id'], user=user)
             with transaction.atomic():
@@ -814,18 +996,33 @@ class TodosView(APIView):
                 todo = Todo.objects.create(list=list_obj, **todo_data)
                 cache.delete_many([f'user_todos:{user.id}*'])
                 
-            return Response({
-                'id': str(todo.id), 
-                'title': todo.title, 
-                'status': todo.status,
-                'priority': todo.priority,
-                'list_name': list_obj.name
-            }, status=status.HTTP_201_CREATED)
+            return created_response(
+                message="Todo created successfully",
+                code="TODO_CREATED",
+                data={
+                    'id': str(todo.id), 
+                    'title': todo.title, 
+                    'status': todo.status,
+                    'priority': todo.priority,
+                    'list_name': list_obj.name
+                },
+                path=request.path
+            )
         except List.DoesNotExist:
-            return Response({'error': 'List not found'}, status=status.HTTP_404_NOT_FOUND)
+            return error_response(
+                message="List not found",
+                code="LIST_NOT_FOUND",
+                path=request.path,
+                status_code=status.HTTP_404_NOT_FOUND
+            )
         except Exception as e:
             logger.error(f"Todo creation error: {e}")
-            return Response({'error': 'Creation failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return error_response(
+                message="Todo creation failed",
+                code="TODO_CREATION_ERROR",
+                path=request.path,
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 def todos(request):
     view = TodosView()

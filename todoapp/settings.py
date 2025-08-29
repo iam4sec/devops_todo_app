@@ -24,6 +24,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'django_redis',
     'drf_spectacular',
+    'sslserver',
     'core',
 ]
 
