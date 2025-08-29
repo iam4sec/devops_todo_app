@@ -10,7 +10,7 @@ WORKDIR /app
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt django-sslserver
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
@@ -29,7 +29,7 @@ RUN useradd --create-home --shell /bin/bash app && \
     chown -R app:app /app
 USER app
 
-EXPOSE 8000 8443
+EXPOSE 8000
 
 ENTRYPOINT ["./entrypoint.sh"]
-CMD ["python", "manage.py", "runsslserver", "0.0.0.0:8443", "--certificate", "ssl/cert.pem", "--key", "ssl/key.pem"]
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]

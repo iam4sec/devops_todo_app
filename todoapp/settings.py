@@ -8,10 +8,7 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-key-change-in-production')
 DEBUG = os.environ.get('DEBUG', 'False') == 'True'
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,0.0.0.0').split(',')
 
-# Security settings
-if not DEBUG:
-    SECURE_SSL_REDIRECT = True
-    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
     
 DATA_UPLOAD_MAX_MEMORY_SIZE = 5242880  # 5MB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 2621440  # 2.5MB
@@ -24,7 +21,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'django_redis',
     'drf_spectacular',
-    'sslserver',
+
     'core',
 ]
 
@@ -115,22 +112,17 @@ REST_FRAMEWORK = {
 }
 
 # Security settings
-SECURE_HSTS_SECONDS = 31536000
-SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-SECURE_HSTS_PRELOAD = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = 'no-referrer'
 X_FRAME_OPTIONS = 'DENY'
 
 SESSION_COOKIE_AGE = int(os.environ.get('SESSION_TIMEOUT', '900'))
 SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_SAMESITE = 'Lax'
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 SESSION_SAVE_EVERY_REQUEST = True
 
 CSRF_COOKIE_HTTPONLY = True
-CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = 'Lax'
 
 
@@ -177,7 +169,7 @@ All endpoints return consistent error responses with appropriate HTTP status cod
     ],
     'SERVERS': [
         {'url': 'http://localhost:8000', 'description': 'Development server'},
-        {'url': 'https://your-domain.com', 'description': 'Production server'},
+
     ],
     'CONTACT': {
         'name': 'API Support',
