@@ -29,6 +29,41 @@ python manage.py createsuperuser
 python manage.py runserver
 ```
 
+## HTTPS Development Setup
+
+### Generate SSL Certificate
+```bash
+./generate_cert.sh
+```
+
+### Run with HTTPS
+```bash
+python manage.py runsslserver 0.0.0.0:8443 --certificate ssl/cert.pem --key ssl/key.pem
+```
+
+### Docker HTTPS
+```bash
+docker-compose up --build
+```
+Access: `https://localhost:8443`
+
+### Bypass SSL Warnings
+
+**curl:**
+```bash
+curl -k https://localhost:8443/
+```
+
+**Browser Trust (Optional):**
+- **Chrome/Edge**: `chrome://settings/certificates` → Import `ssl/cert.pem`
+- **Firefox**: `about:preferences#privacy` → View Certificates → Import
+
+**System Trust:**
+```bash
+sudo cp ssl/cert.pem /usr/local/share/ca-certificates/localhost.crt
+sudo update-ca-certificates
+```
+
 ## API Documentation
 
 Swagger UI is available at: `http://localhost:8000/api/docs/`
@@ -76,6 +111,10 @@ OpenAPI schema: `http://localhost:8000/api/schema/`
 ```bash
 ./deploy.sh
 ```
+
+**Ports:**
+- HTTP: `http://localhost:8000`
+- HTTPS: `https://localhost:8443`
 
 ### Manual Setup
 1. Copy nginx config: `cp nginx/nginx.conf /etc/nginx/sites-available/todoapp`
