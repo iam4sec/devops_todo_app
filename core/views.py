@@ -17,6 +17,30 @@ from .serializers import LoginSerializer, ListSerializer, TodoSerializer
 
 logger = logging.getLogger(__name__)
 
+# Root endpoint
+@extend_schema(
+    summary="API Information",
+    description="Get basic API information and available endpoints",
+    tags=["Info"],
+    responses={
+        200: {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "version": {"type": "string"},
+                "docs": {"type": "string"}
+            }
+        }
+    }
+)
+@require_http_methods(["GET"])
+def api_info(request):
+    return JsonResponse({
+        'name': 'Todo App API',
+        'version': '1.0.0',
+        'docs': '/api/docs/'
+    })
+
 # Utilities
 def get_ip(request):
     return request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0] or request.META.get('REMOTE_ADDR')

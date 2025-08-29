@@ -15,6 +15,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy application code
 COPY . .
 
+# Create logs directory
+RUN mkdir -p /app/logs
+
 # Collect static files
 RUN python manage.py collectstatic --noinput
 

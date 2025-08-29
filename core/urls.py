@@ -42,6 +42,9 @@ def todo_detail_handler(request, todo_id):
     return HttpResponseNotAllowed(['GET', 'PATCH', 'DELETE'])
 
 urlpatterns = [
+    # Root
+    path('', views.api_info, name='api_info'),
+    
     # Auth
     path('auth/csrf/', views.csrf_token, name='csrf'),
     path('auth/login/', views.login, name='login'),
