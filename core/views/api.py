@@ -1,22 +1,39 @@
 import json
 import base64
+import re
 from datetime import datetime
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_protect
 from django.db import transaction
 from django.utils import timezone
+from django.core.exceptions import ValidationError
 from ..models import User, Session, List, Todo
 from ..utils import json_response, error_response, check_idempotency, save_idempotency
+from ..validators import InputValidator, log_security_event
 
 def get_user_from_session(request):
     sid = request.COOKIES.get('sid')
     if not sid:
         return None
     try:
+        InputValidator.validate_uuid(sid)
         session = Session.objects.select_related('user').get(id=sid, expires_at__gt=timezone.now())
+        
+        # Validate session IP for security
+        current_ip = get_client_ip(request)
+        if session.ip != current_ip:
+            log_security_event('SESSION_IP_MISMATCH', user_id=str(session.user.id), 
+                             ip=current_ip, details=f"Original IP: {session.ip}")
+            session.delete()
+            return None
+            
         return session.user
-    except Session.DoesNotExist:
+    except (Session.DoesNotExist, ValidationError):
         return None
+
+def get_client_ip(request):
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    return x_forwarded_for.split(',')[0] if x_forwarded_for else request.META.get('REMOTE_ADDR')
 
 @require_http_methods(["GET"])
 def me(request):
@@ -77,10 +94,20 @@ def lists(request):
     
     try:
         data = json.loads(request.body)
+        
+        # Validate input
+        name = InputValidator.sanitize_text(data.get('name', ''), 255)
+        if not name or len(name.strip()) == 0:
+            raise ValidationError("List name is required")
+        
+        color = data.get('color')
+        if color and not re.match(r'^#[0-9A-Fa-f]{6}$', color):
+            raise ValidationError("Invalid color format")
+        
         list_obj = List.objects.create(
             user=user,
-            name=data['name'],
-            color=data.get('color')
+            name=name,
+            color=color
         )
         
         response_data = {
@@ -121,9 +148,15 @@ def list_detail(request, list_id):
         try:
             data = json.loads(request.body)
             if 'name' in data:
-                list_obj.name = data['name']
+                name = InputValidator.sanitize_text(data['name'], 255)
+                if not name or len(name.strip()) == 0:
+                    raise ValidationError("List name is required")
+                list_obj.name = name
             if 'color' in data:
-                list_obj.color = data['color']
+                color = data['color']
+                if color and not re.match(r'^#[0-9A-Fa-f]{6}$', color):
+                    raise ValidationError("Invalid color format")
+                list_obj.color = color
             list_obj.save()
             
             return json_response({
@@ -197,14 +230,31 @@ def todos(request):
     # POST
     try:
         data = json.loads(request.body)
-        list_obj = List.objects.get(id=data['list_id'], user=user)
+        
+        # Validate input
+        list_id = InputValidator.validate_uuid(data.get('list_id'))
+        title = InputValidator.sanitize_text(data.get('title', ''), 255)
+        note = InputValidator.sanitize_text(data.get('note', ''), 1000)
+        
+        if not title or len(title.strip()) == 0:
+            raise ValidationError("Todo title is required")
+        
+        status = data.get('status', 'open')
+        if status not in ['open', 'doing', 'done']:
+            raise ValidationError("Invalid status")
+        
+        priority = int(data.get('priority', 3))
+        if priority < 1 or priority > 5:
+            raise ValidationError("Priority must be between 1 and 5")
+        
+        list_obj = List.objects.get(id=list_id, user=user)
         
         todo = Todo.objects.create(
             list=list_obj,
-            title=data['title'],
-            note=data.get('note', ''),
-            status=data.get('status', 'open'),
-            priority=data.get('priority', 3),
+            title=title,
+            note=note,
+            status=status,
+            priority=priority,
             due_date=data.get('due_date')
         )
         
@@ -250,9 +300,29 @@ def todo_detail(request, todo_id):
         try:
             data = json.loads(request.body)
             
-            for field in ['title', 'note', 'status', 'priority', 'due_date']:
-                if field in data:
-                    setattr(todo, field, data[field])
+            if 'title' in data:
+                title = InputValidator.sanitize_text(data['title'], 255)
+                if not title or len(title.strip()) == 0:
+                    raise ValidationError("Todo title is required")
+                todo.title = title
+            
+            if 'note' in data:
+                todo.note = InputValidator.sanitize_text(data['note'], 1000)
+            
+            if 'status' in data:
+                status = data['status']
+                if status not in ['open', 'doing', 'done']:
+                    raise ValidationError("Invalid status")
+                todo.status = status
+            
+            if 'priority' in data:
+                priority = int(data['priority'])
+                if priority < 1 or priority > 5:
+                    raise ValidationError("Priority must be between 1 and 5")
+                todo.priority = priority
+            
+            if 'due_date' in data:
+                todo.due_date = data['due_date']
             
             todo.version += 1
             todo.save()

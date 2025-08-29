@@ -29,6 +29,11 @@ python manage.py createsuperuser
 python manage.py runserver
 ```
 
+## API Documentation
+
+Swagger UI is available at: `http://localhost:8000/api/docs/`
+OpenAPI schema: `http://localhost:8000/api/schema/`
+
 ## API Endpoints
 
 ### Auth
