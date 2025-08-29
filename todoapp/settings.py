@@ -25,14 +25,12 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    'core.middleware.SecurityMiddleware',
+    'core.middleware.OptimizedMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'core.middleware.BruteForceMiddleware',
-    'core.middleware.RateLimitMiddleware',
 ]
 
 ROOT_URLCONF = 'todoapp.urls'
@@ -63,10 +61,33 @@ DATABASES = {
         'OPTIONS': {
             'sslmode': os.environ.get('DB_SSL_MODE', 'prefer'),
             'connect_timeout': 10,
+            'MAX_CONNS': 20,
+            'MIN_CONNS': 5,
         },
-        'CONN_MAX_AGE': 60,
+        'CONN_MAX_AGE': 300,
+        'CONN_HEALTH_CHECKS': True,
     }
 }
+
+# Redis Cache Configuration
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': os.environ.get('REDIS_URL', 'redis://localhost:6379/1'),
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'CONNECTION_POOL_KWARGS': {
+                'max_connections': 20,
+                'retry_on_timeout': True,
+            },
+        },
+        'KEY_PREFIX': 'todoapp',
+        'TIMEOUT': 300,
+    }
+}
+
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+SESSION_CACHE_ALIAS = 'default'
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -104,19 +125,9 @@ SESSION_SAVE_EVERY_REQUEST = True
 CSRF_COOKIE_HTTPONLY = True
 CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = 'Lax'
-CSRF_FAILURE_VIEW = 'core.views.auth.csrf_failure'
 
-# Security timeouts
-MAX_LOGIN_ATTEMPTS = int(os.environ.get('MAX_LOGIN_ATTEMPTS', '5'))
-LOCKOUT_DURATION = int(os.environ.get('LOCKOUT_DURATION', '300'))
 
-# Content Security Policy
-CSP_DEFAULT_SRC = ("'self'",)
-CSP_SCRIPT_SRC = ("'self'", "'unsafe-inline'")
-CSP_STYLE_SRC = ("'self'", "'unsafe-inline'")
-CSP_IMG_SRC = ("'self'", "data:")
-CSP_CONNECT_SRC = ("'self'",)
-CSP_FRAME_ANCESTORS = ("'none'",)
+
 
 # Static files
 STATIC_URL = '/static/'
@@ -139,40 +150,15 @@ SPECTACULAR_SETTINGS = {
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
-    'formatters': {
-        'verbose': {
-            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
-            'style': '{',
-        },
-        'security': {
-            'format': 'SECURITY {asctime} {levelname} {message}',
-            'style': '{',
-        },
-    },
     'handlers': {
-        'file': {
-            'level': os.environ.get('LOG_LEVEL', 'INFO'),
-            'class': 'logging.FileHandler',
-            'filename': '/app/logs/django.log',
-            'formatter': 'verbose',
-        },
-        'security': {
-            'level': 'WARNING',
-            'class': 'logging.FileHandler',
-            'filename': '/app/logs/security.log',
-            'formatter': 'security',
+        'console': {
+            'class': 'logging.StreamHandler',
         },
     },
     'loggers': {
         'django': {
-            'handlers': ['file'],
-            'level': os.environ.get('LOG_LEVEL', 'INFO'),
-            'propagate': True,
-        },
-        'security': {
-            'handlers': ['security'],
-            'level': 'WARNING',
-            'propagate': False,
+            'handlers': ['console'],
+            'level': 'INFO',
         },
     },
 }
