@@ -4,12 +4,12 @@
 
 ```mermaid
 graph LR
-    Client["🌐 Client<br/>(Browser)"] 
+    Client["🌐 Client<br/>(API Consumer)"] 
     Nginx["⚡ Nginx<br/>Reverse Proxy"]
-    Django["🐍 Django<br/>Application"]
+    Django["🐍 Django<br/>REST API"]
     PostgreSQL["🐘 PostgreSQL<br/>Database"]
     
-    Client -->|"HTTPS/443<br/>• JavaScript<br/>• CSRF Token<br/>• Session Cookies"| Nginx
+    Client -->|"HTTPS/443<br/>• HTTP Requests<br/>• CSRF Token<br/>• Session Cookies"| Nginx
     Nginx -->|"HTTP/8000<br/>• SSL Termination<br/>• Rate Limiting<br/>• Security Headers"| Django
     Django -->|"TCP/5432<br/>• REST API<br/>• Authentication<br/>• ORM Operations"| PostgreSQL
     
@@ -23,16 +23,16 @@ graph LR
 
 ## Component Deep Dive
 
-### 1. Frontend Layer (Client)
+### 1. Client Layer
 
-**Technologies**: HTML5, CSS3, JavaScript
+**Technologies**: Any HTTP client (Browser, Mobile App, CLI, etc.)
 
 **Responsibilities**:
-- User interface rendering
-- Form validation and submission
-- CSRF token management
+- API requests to backend endpoints
+- CSRF token management for POST requests
 - Session cookie handling
-- API communication via fetch/XMLHttpRequest
+- Authentication token storage
+- HTTP communication via REST API
 
 **Security Features**:
 - HttpOnly cookies (prevents XSS access)
