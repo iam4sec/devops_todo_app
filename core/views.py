@@ -16,7 +16,7 @@ from rest_framework import status
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
 from drf_spectacular.openapi import OpenApiTypes
 from .models import User, Session, List, Todo
-from .serializers import LoginSerializer, ListSerializer, TodoSerializer
+from .serializers import LoginSerializer, ListSerializer, TodoSerializer, RegisterSerializer, LoginRequestSerializer, ListCreateSerializer, TodoCreateSerializer, TodoUpdateSerializer, TodosBulkSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -142,15 +142,17 @@ class RegisterView(APIView):
         summary="User Registration",
         description="Register a new user account",
         tags=["Auth"],
-        request={
-            "type": "object",
-            "properties": {
-                "email": {"type": "string", "format": "email", "description": "User email"},
-                "password": {"type": "string", "minLength": 8, "description": "User password"},
-                "password_confirm": {"type": "string", "description": "Password confirmation"}
-            },
-            "required": ["email", "password", "password_confirm"]
-        },
+        request=RegisterSerializer,
+        examples=[
+            OpenApiExample(
+                'Register Example',
+                value={
+                    'email': 'john.doe@example.com',
+                    'password': 'SecurePass123!',
+                    'password_confirm': 'SecurePass123!'
+                }
+            )
+        ],
         responses={
             201: {
                 "type": "object",
@@ -208,14 +210,16 @@ class LoginView(APIView):
         summary="User Login",
         description="Authenticate user and create session",
         tags=["Auth"],
-        request={
-            "type": "object",
-            "properties": {
-                "email": {"type": "string", "format": "email", "description": "User email"},
-                "password": {"type": "string", "description": "User password"}
-            },
-            "required": ["email", "password"]
-        },
+        request=LoginRequestSerializer,
+        examples=[
+            OpenApiExample(
+                'Login Example',
+                value={
+                    'email': 'john.doe@example.com',
+                    'password': 'SecurePass123!'
+                }
+            )
+        ],
         responses={
             200: {
                 "type": "object",
@@ -471,14 +475,16 @@ class ListsView(APIView):
         summary="Create List",
         description="Create a new todo list",
         tags=["Lists"],
-        request={
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "maxLength": 255, "description": "List name"},
-                "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$", "description": "Hex color code"}
-            },
-            "required": ["name"]
-        },
+        request=ListCreateSerializer,
+        examples=[
+            OpenApiExample(
+                'Create List Example',
+                value={
+                    'name': 'Work Tasks',
+                    'color': '#3B82F6'
+                }
+            )
+        ],
         responses={
             201: {
                 "type": "object",
@@ -593,13 +599,16 @@ class ListDetailView(APIView):
         summary="Update List",
         description="Update list name or color",
         tags=["Lists"],
-        request={
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "maxLength": 255},
-                "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}
-            }
-        },
+        request=ListCreateSerializer,
+        examples=[
+            OpenApiExample(
+                'Update List Example',
+                value={
+                    'name': 'Personal Projects',
+                    'color': '#10B981'
+                }
+            )
+        ],
         responses={
             200: {
                 "type": "object",
@@ -761,16 +770,18 @@ class TodosView(APIView):
         summary="Create Todo",
         description="Create a new todo item",
         tags=["Todos"],
-        request={
-            "type": "object",
-            "properties": {
-                "list_id": {"type": "string", "format": "uuid", "description": "List ID"},
-                "title": {"type": "string", "maxLength": 255, "description": "Todo title"},
-                "status": {"type": "string", "enum": ["open", "doing", "done"], "default": "open"},
-                "priority": {"type": "integer", "minimum": 1, "maximum": 5, "default": 3}
-            },
-            "required": ["list_id", "title"]
-        },
+        request=TodoCreateSerializer,
+        examples=[
+            OpenApiExample(
+                'Create Todo Example',
+                value={
+                    'list_id': '550e8400-e29b-41d4-a716-446655440000',
+                    'title': 'Review quarterly reports',
+                    'status': 'open',
+                    'priority': 4
+                }
+            )
+        ],
         responses={
             201: {
                 "type": "object",
@@ -878,14 +889,17 @@ class TodoDetailView(APIView):
         summary="Update Todo",
         description="Update todo properties (title, status, priority)",
         tags=["Todos"],
-        request={
-            "type": "object",
-            "properties": {
-                "title": {"type": "string", "maxLength": 255},
-                "status": {"type": "string", "enum": ["open", "doing", "done"]},
-                "priority": {"type": "integer", "minimum": 1, "maximum": 5}
-            }
-        },
+        request=TodoUpdateSerializer,
+        examples=[
+            OpenApiExample(
+                'Update Todo Example',
+                value={
+                    'title': 'Complete project documentation',
+                    'status': 'doing',
+                    'priority': 3
+                }
+            )
+        ],
         responses={
             200: {
                 "type": "object",
@@ -984,8 +998,7 @@ class TodoToggleView(APIView):
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "format": "uuid"},
-                    "status": {"type": "string", "enum": ["open", "done"]},
-                    "version": {"type": "integer"}
+                    "status": {"type": "string", "enum": ["open", "done"]}
                 }
             },
             404: {
@@ -1009,7 +1022,7 @@ class TodoToggleView(APIView):
                 todo.save()
                 cache.delete_many([f'user_todos:{user.id}*', f'todo_detail:{todo_id}:{user.id}'])
                 
-            return Response({'id': str(todo.id), 'status': todo.status, 'version': todo.version})
+            return Response({'id': str(todo.id), 'status': todo.status})
         except Todo.DoesNotExist:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -1023,37 +1036,25 @@ class TodosBulkView(APIView):
         summary="Bulk Todo Operations",
         description="Perform bulk create/delete operations on todos",
         tags=["Todos"],
-        request={
-            "type": "object",
-            "properties": {
-                "operations": {
-                    "type": "array",
-                    "maxItems": 100,
-                    "items": {
-                        "oneOf": [
-                            {
-                                "type": "object",
-                                "properties": {
-                                    "type": {"type": "string", "enum": ["create"]},
-                                    "list_id": {"type": "string", "format": "uuid"},
-                                    "title": {"type": "string", "maxLength": 255}
-                                },
-                                "required": ["type", "list_id", "title"]
-                            },
-                            {
-                                "type": "object",
-                                "properties": {
-                                    "type": {"type": "string", "enum": ["delete"]},
-                                    "id": {"type": "string", "format": "uuid"}
-                                },
-                                "required": ["type", "id"]
-                            }
-                        ]
-                    }
+        request=TodosBulkSerializer,
+        examples=[
+            OpenApiExample(
+                'Bulk Operations Example',
+                value={
+                    'operations': [
+                        {
+                            'type': 'create',
+                            'list_id': '550e8400-e29b-41d4-a716-446655440000',
+                            'title': 'Schedule team meeting'
+                        },
+                        {
+                            'type': 'delete',
+                            'id': '123e4567-e89b-12d3-a456-426614174000'
+                        }
+                    ]
                 }
-            },
-            "required": ["operations"]
-        },
+            )
+        ],
         responses={
             200: {
                 "type": "object",

@@ -1,6 +1,7 @@
 from django.contrib.auth import authenticate
 from django.core.exceptions import ValidationError
 from django.utils.html import strip_tags
+from rest_framework import serializers
 import html
 import re
 
@@ -76,3 +77,44 @@ class TodoSerializer(BaseSerializer):
                 'priority': int(priority) if priority else 3
             }
         return None
+
+# DRF Serializers for schema generation
+class RegisterSerializer(serializers.Serializer):
+    email = serializers.EmailField(help_text="User email address")
+    password = serializers.CharField(min_length=8, help_text="User password")
+    password_confirm = serializers.CharField(help_text="Password confirmation")
+
+class LoginRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField(help_text="User email address")
+    password = serializers.CharField(help_text="User password")
+
+class ListCreateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=255, help_text="List name")
+    color = serializers.RegexField(regex=r'^#[0-9A-Fa-f]{6}$', required=False, help_text="Hex color code")
+
+class TodoCreateSerializer(serializers.Serializer):
+    list_id = serializers.UUIDField(help_text="List ID")
+    title = serializers.CharField(max_length=255, help_text="Todo title")
+    status = serializers.ChoiceField(choices=['open', 'doing', 'done'], default='open', required=False)
+    priority = serializers.IntegerField(min_value=1, max_value=5, default=3, required=False)
+
+class TodoUpdateSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=255, required=False, help_text="Todo title")
+    status = serializers.ChoiceField(choices=['open', 'doing', 'done'], required=False)
+    priority = serializers.IntegerField(min_value=1, max_value=5, required=False)
+
+class BulkCreateOperationSerializer(serializers.Serializer):
+    type = serializers.ChoiceField(choices=['create'])
+    list_id = serializers.UUIDField()
+    title = serializers.CharField(max_length=255)
+
+class BulkDeleteOperationSerializer(serializers.Serializer):
+    type = serializers.ChoiceField(choices=['delete'])
+    id = serializers.UUIDField()
+
+class TodosBulkSerializer(serializers.Serializer):
+    operations = serializers.ListField(
+        child=serializers.JSONField(),
+        max_length=100,
+        help_text="Array of operations to perform"
+    )
