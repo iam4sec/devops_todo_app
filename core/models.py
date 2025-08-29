@@ -64,6 +64,7 @@ class Todo(models.Model):
     priority = models.IntegerField(default=3, db_index=True)
     due_date = models.DateField(null=True, blank=True, db_index=True)
     version = models.IntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True, db_index=True)
     
     class Meta:
