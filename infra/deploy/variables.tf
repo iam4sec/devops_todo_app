@@ -1,5 +1,5 @@
 variable "prefix" {
-  default = "Prefix for resource in AWS
+  description = "Prefix for resource in AWS"
   default = "raa"
 }
 

@@ -7,11 +7,11 @@ terraform {
   }
 
   backend "s3" {
-    bucket = "bucket-name"
+    bucket = "devops-todo-api-tf-state"
     key = "tf-state-deploy"
     workspace_key_prefix = "tf-state-deploy-env"
     region = "us-east-1"
-    dynamodb_table = "dynamodb-table-name"
+    dynamodb_table = "devops-todo-api-tf-lock"
     encrypt = true
   }
 }

@@ -1,11 +1,11 @@
 variable "tf_state_bucket" {
   description = "Name of S3 bucket in AWS for storing TF state"
-  default = "bucket-name"
+  default = "devops-todo-api-tf-state"
 }
 
 variable "tf_state_lock_table" {
   description = "Name of the DynamoDB table for TF state locking"
-  default = "dynamodb-table-name"
+  default = "devops-todo-api-tf-lock"
 }
 
 variable "project" {
