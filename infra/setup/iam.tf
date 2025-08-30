@@ -95,3 +95,26 @@ resource "aws_iam_user_policy_attachment" "ecr" {
   user       = aws_iam_user.cd.name
   policy_arn = aws_iam_policy.ecr.arn
 }
+
+###
+# Policy for EC2 access
+###
+
+
+data "aws_iam_policy_document" "ec2" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "ec2:DescribeInstances",
+      "ec2:DescribeKeyPairs",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeVpcs",
+      "ec2:DescribeTags",
+      "ec2:RunInstances",
+      "ec2:CreateTags",
+      "ec2"
+    ]
+    resources = ["*"]
+  }
+}
