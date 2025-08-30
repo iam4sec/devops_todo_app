@@ -94,6 +94,12 @@ data "aws_iam_policy_document" "ecr" {
 
 resource "aws_iam_policy" "ecr" {
   name        = "${aws_iam_user.cd.name}-ecr"
-  description = "Allow user to use the ECR resources"
+  description = "Allow user to Manage the ECR resources"
   policy      = data.aws_iam_policy_document.ecr.json
+}
+
+
+resource "aws_iam_user_policy_attachment" "ecr" {
+  user       = aws_iam_user.cd.name
+  policy_arn = aws_iam_policy.ecr.arn
 }
