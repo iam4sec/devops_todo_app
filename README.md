@@ -101,24 +101,24 @@ export AWS_REGION=us-east-1
 cd infra/
 
 # Initialize and apply setup (creates S3 bucket, DynamoDB table, IAM user for CD, and ECR repositories)
-docker-compose run --rm terraform -chdir=setup init
-docker-compose run --rm terraform -chdir=setup plan
-docker-compose run --rm terraform -chdir=setup apply
+docker compose run --rm terraform -chdir=setup init
+docker compose run --rm terraform -chdir=setup plan
+docker compose run --rm terraform -chdir=setup apply
 
 # Get CD user credentials (needed for CI/CD)
-docker-compose run --rm terraform -chdir=setup output cd_user_access
-docker-compose run --rm terraform -chdir=setup output -raw cd_user_access_key_secret
+docker compose run --rm terraform -chdir=setup output cd_user_access
+docker compose run --rm terraform -chdir=setup output -raw cd_user_access_key_secret
 
 # Get ECR repository URLs
-docker-compose run --rm terraform -chdir=setup output ecr_repo_app
-docker-compose run --rm terraform -chdir=setup output ecr_repo_proxy
+docker compose run --rm terraform -chdir=setup output ecr_repo_app
+docker compose run --rm terraform -chdir=setup output ecr_repo_proxy
 
 # Initialize and apply deployment infrastructure
 export TF_WORKSPACE=dev  # or staging/prod
-docker-compose run --rm terraform -chdir=deploy init
-docker-compose run --rm terraform -chdir=deploy workspace select -or-create $TF_WORKSPACE
-docker-compose run --rm terraform -chdir=deploy plan
-docker-compose run --rm terraform -chdir=deploy apply
+docker compose run --rm terraform -chdir=deploy init
+docker compose run --rm terraform -chdir=deploy workspace select -or-create $TF_WORKSPACE
+docker compose run --rm terraform -chdir=deploy plan
+docker compose run --rm terraform -chdir=deploy apply
 ```
 
 ### Infrastructure Components
