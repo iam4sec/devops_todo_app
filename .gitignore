@@ -241,3 +241,5 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 
+infra/setup/.terraform/terraform.tfstate
+infra/setup/.terraform/providers/registry.terraform.io/hashicorp/aws/5.23.0/linux_amd64/terraform-provider-aws_v5.23.0_x5
