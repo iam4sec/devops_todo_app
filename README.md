@@ -100,10 +100,18 @@ export AWS_REGION=us-east-1
 # Navigate to infra directory
 cd infra/
 
-# Initialize and apply setup (creates S3 bucket, DynamoDB table, and IAM user for CD)
+# Initialize and apply setup (creates S3 bucket, DynamoDB table, IAM user for CD, and ECR repositories)
 docker-compose run --rm terraform -chdir=setup init
 docker-compose run --rm terraform -chdir=setup plan
 docker-compose run --rm terraform -chdir=setup apply
+
+# Get CD user credentials (needed for CI/CD)
+docker-compose run --rm terraform -chdir=setup output cd_user_access
+docker-compose run --rm terraform -chdir=setup output -raw cd_user_access_key_secret
+
+# Get ECR repository URLs
+docker-compose run --rm terraform -chdir=setup output ecr_repo_app
+docker-compose run --rm terraform -chdir=setup output ecr_repo_proxy
 
 # Initialize and apply deployment infrastructure
 export TF_WORKSPACE=dev  # or staging/prod
@@ -119,7 +127,10 @@ docker-compose run --rm terraform -chdir=deploy apply
 - **S3 Bucket**: `devops-todo-api-tf-state` for Terraform state storage
 - **DynamoDB Table**: `devops-todo-api-tf-lock` for state locking
 - **IAM User**: `todo-app-api-cd` with policies for CI/CD access
-- **IAM Policies**: S3 and DynamoDB access for Terraform backend
+- **IAM Policies**: S3, DynamoDB, and ECR access for Terraform backend and container deployment
+- **ECR Repositories**: 
+  - `devops-todo-api` for application Docker images
+  - `devops-todo-proxy` for proxy Docker images
 
 #### Deploy Module (`infra/deploy/`)
 - Uses workspace-based environments with prefix `raa-{workspace}`

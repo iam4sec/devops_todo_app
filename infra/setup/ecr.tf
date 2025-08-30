@@ -12,6 +12,16 @@ resource "aws_ecr_repository" "app" {
   }
 }
 
+resource "aws_ecr_repository" "proxy" {
+  name                 = "devops-todo-proxy"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = false
+  }
+}
+
 output "ecr_repo_app" {
   description = "ECR repository URL for app image"
   value          = aws_ecr_repository.app.repository_url
