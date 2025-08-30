@@ -155,3 +155,14 @@ docker-compose run --rm terraform -chdir=deploy workspace list
 export TF_WORKSPACE=dev
 docker-compose run --rm terraform -chdir=deploy workspace select $TF_WORKSPACE
 ```
+
+### Cleanup Resources
+
+```bash
+# Destroy deployment infrastructure (run for each workspace)
+export TF_WORKSPACE=dev  # or staging/prod
+docker-compose run --rm terraform -chdir=deploy destroy
+
+# Destroy setup infrastructure (S3, DynamoDB, IAM, ECR)
+docker-compose run --rm terraform -chdir=setup destroy
+```
