@@ -75,8 +75,10 @@ OpenAPI schema: `http://localhost:8000/api/schema/`
 ./deploy.sh
 ```
 
-**Port:**
-- HTTP: `http://localhost:8000`
+**Access:**
+- Application: `http://localhost:80` (via Nginx)
+- API Documentation: `http://localhost:80/api/docs/`
+- Direct Django: `http://localhost:8000` (development only)
 
 ### Manual Setup
 1. Copy nginx config: `cp nginx/nginx.conf /etc/nginx/sites-available/todoapp`
@@ -205,6 +207,20 @@ docker compose run --rm terraform -chdir=deploy workspace select $TF_WORKSPACE
 - `ECR_REPO_APP` - Application ECR repository URL
 - `ECR_REPO_PROXY` - Proxy ECR repository URL
 - `DOCKERHUB_USER` - Docker Hub username
+
+### Access AWS Deployment
+
+**Production URLs:**
+- **Production**: `https://api.aidevstack.org`
+- **Staging**: `https://api.staging.aidevstack.org`
+- **Development**: `https://api.dev.aidevstack.org`
+
+**API Documentation:**
+- Swagger UI: `https://{domain}/api/docs/`
+- OpenAPI Schema: `https://{domain}/api/schema/`
+
+**Health Check:**
+- Health endpoint: `https://{domain}/api/health-check/`
 
 ### Cleanup Resources
 
