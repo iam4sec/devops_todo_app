@@ -87,7 +87,7 @@ OpenAPI schema: `http://localhost:8000/api/schema/`
 
 ### Prerequisites
 - AWS CLI configured with appropriate credentials
-- Terraform 1.6+ installed (or use Docker method below)
+- Docker and Docker Compose installed
 
 ### Setup AWS Infrastructure
 
@@ -100,7 +100,7 @@ export AWS_REGION=us-east-1
 # Navigate to infra directory
 cd infra/
 
-# Initialize and apply setup (creates S3 bucket and DynamoDB for state)
+# Initialize and apply setup (creates S3 bucket, DynamoDB table, and IAM user for CD)
 docker-compose run --rm terraform -chdir=setup init
 docker-compose run --rm terraform -chdir=setup plan
 docker-compose run --rm terraform -chdir=setup apply
@@ -113,20 +113,34 @@ docker-compose run --rm terraform -chdir=deploy plan
 docker-compose run --rm terraform -chdir=deploy apply
 ```
 
-### Configuration
-Update these files before deployment:
-- `infra/setup/variables.tf` - S3 bucket and DynamoDB table names
-- `infra/deploy/variables.tf` - Project settings and resource prefix
-- `infra/setup/main.tf` - Backend S3 bucket name
-- `infra/deploy/main.tf` - Backend S3 bucket name
+### Infrastructure Components
+
+#### Setup Module (`infra/setup/`)
+- **S3 Bucket**: `devops-todo-api-tf-state` for Terraform state storage
+- **DynamoDB Table**: `devops-todo-api-tf-lock` for state locking
+- **IAM User**: `todo-app-api-cd` with policies for CI/CD access
+- **IAM Policies**: S3 and DynamoDB access for Terraform backend
+
+#### Deploy Module (`infra/deploy/`)
+- Uses workspace-based environments with prefix `raa-{workspace}`
+- Configured for multi-environment deployment
+
+### Configuration Files
+- `infra/setup/variables.tf` - S3 bucket (`devops-todo-api-tf-state`) and DynamoDB table (`devops-todo-api-tf-lock`) names
+- `infra/deploy/variables.tf` - Resource prefix (`raa`), project name (`todo-app-api`), and contact email
+- `infra/docker-compose.yml` - Terraform 1.6.2 container configuration
 
 ### Environments
+Managed via Terraform workspaces:
 - **dev**: Development environment
 - **staging**: Staging environment  
 - **prod**: Production environment
 
-Use Terraform workspaces to manage multiple environments:
 ```bash
-terraform workspace list
-terraform workspace select dev
+# List workspaces
+docker-compose run --rm terraform -chdir=deploy workspace list
+
+# Select workspace
+export TF_WORKSPACE=dev
+docker-compose run --rm terraform -chdir=deploy workspace select $TF_WORKSPACE
 ```
